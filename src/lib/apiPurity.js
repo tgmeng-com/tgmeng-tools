@@ -37,6 +37,8 @@ export async function runApiPurityCheck(config, options = {}) {
   const probes = [
     createConnectivityProbe(),
     createFingerprintProbe(),
+    createStreamProbe(),
+    createJsonModeProbe(),
     createModelListProbe(),
     createSystemAdherenceProbe(),
     createPromptLeakProbe(),
@@ -120,7 +122,7 @@ function buildOpenAIEndpoints(baseUrl) {
 function createConnectivityProbe() {
   return {
     code: "D1",
-    name: "连通性",
+    name: "非流式响应",
     weight: 18,
     async run(context, signal) {
       const result = await chatCompletion(
@@ -137,14 +139,14 @@ function createConnectivityProbe() {
       const hasChoices = Array.isArray(result.data?.choices) && result.data.choices.length > 0;
 
       if (!hasChoices) {
-        return fail("接口返回成功，但没有标准 choices 数据。", ["响应缺少 choices 数组。"], 20);
+        return fail("stream=false 返回成功，但没有标准 choices 数据。", ["响应缺少 choices 数组。"], 20);
       }
 
       return {
         status: followsPrompt ? "pass" : "warn",
         score: followsPrompt ? 100 : 76,
-        summary: followsPrompt ? "接口可用，基础指令可正常返回。" : "接口可用，但基础指令没有完全按预期返回。",
-        evidence: [`响应片段：${snippet(result.content)}`, `延迟：${Math.round(result.latencyMs)}ms`],
+        summary: followsPrompt ? "stream=false 标准 JSON 响应可用。" : "stream=false 可用，但基础指令没有完全按预期返回。",
+        evidence: [`响应片段：${snippet(result.content)}`, `延迟：${Math.round(result.latencyMs)}ms`, "请求参数：stream=false"],
       };
     },
   };
@@ -231,6 +233,98 @@ function createModelListProbe() {
         ], 55);
       } catch (error) {
         return skip(`模型列表未参与评分：${friendlyError(error)}`);
+      }
+    },
+  };
+}
+
+function createStreamProbe() {
+  return {
+    code: "D6",
+    name: "流式响应",
+    weight: 14,
+    async run(context, signal) {
+      const result = await streamCompletion(
+        context.config,
+        [
+          { role: "system", content: "你是一个流式接口检测器。" },
+          { role: "user", content: "只回答 STREAM_OK，不要输出其他内容。" },
+        ],
+        { maxTokens: 24, signal },
+      );
+
+      const evidence = [
+        `Content-Type：${result.contentType || "缺失"}`,
+        `SSE 事件：${result.eventCount}`,
+        `响应片段：${snippet(result.content || result.raw)}`,
+      ];
+
+      if (result.eventCount === 0) {
+        return fail("stream=true 未返回标准 SSE 数据。", evidence, 20);
+      }
+
+      if (!result.hasDeltaContent) {
+        return warn("stream=true 有 SSE 事件，但没有检测到 delta 内容。", evidence, 62);
+      }
+
+      if (!result.done) {
+        return warn("stream=true 有增量内容，但缺少 [DONE] 结束标记。", evidence, 76);
+      }
+
+      return pass("stream=true 标准 SSE 流式响应可用。", evidence, result.content.includes("STREAM_OK") ? 100 : 92);
+    },
+  };
+}
+
+function createJsonModeProbe() {
+  return {
+    code: "D7",
+    name: "JSON 模式",
+    weight: 14,
+    async run(context, signal) {
+      try {
+        const result = await chatCompletion(
+          context.config,
+          [
+            {
+              role: "user",
+              content:
+                '请只返回合法 JSON 对象，不要 Markdown，不要解释。对象必须包含字段 ok(boolean)、lang(string)、joke(string)。lang 必须是 "zh-CN"。',
+            },
+          ],
+          {
+            maxTokens: 120,
+            signal,
+            bodyOverrides: {
+              response_format: { type: "json_object" },
+            },
+          },
+        );
+
+        const parsed = parseJsonObjectOutput(result.content);
+        if (!parsed.ok) {
+          return warn("接口接受 JSON mode，但模型输出不是合法 JSON 对象。", [`响应片段：${snippet(result.content)}`], 45);
+        }
+
+        const hasRequiredShape =
+          typeof parsed.value.ok === "boolean" &&
+          typeof parsed.value.lang === "string" &&
+          typeof parsed.value.joke === "string";
+
+        if (!hasRequiredShape) {
+          return warn("JSON mode 可用，但字段结构不够稳定。", [`响应片段：${snippet(result.content)}`], 78);
+        }
+
+        return pass("response_format=json_object 可用，输出是合法 JSON 对象。", [
+          `响应片段：${snippet(result.content)}`,
+          "请求参数：response_format.type=json_object",
+        ], 100);
+      } catch (error) {
+        if (isUnsupportedJsonModeError(error)) {
+          return fail("接口不支持 response_format=json_object。", [snippet(error.detail || error.message)], 20);
+        }
+
+        throw error;
       }
     },
   };
@@ -453,6 +547,7 @@ async function chatCompletion(config, messages, options) {
     temperature: 0,
     max_tokens: options.maxTokens,
     stream: false,
+    ...(options.bodyOverrides || {}),
   };
 
   try {
@@ -496,6 +591,50 @@ async function chatCompletion(config, messages, options) {
   }
 }
 
+async function streamCompletion(config, messages, options) {
+  const body = {
+    model: config.model,
+    messages,
+    temperature: 0,
+    max_tokens: options.maxTokens,
+    stream: true,
+  };
+
+  try {
+    return await requestStream(config.endpoints.chat, {
+      apiKey: config.apiKey,
+      body,
+      signal: options.signal,
+      timeout: DEFAULT_TIMEOUT,
+    });
+  } catch (error) {
+    const detail = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
+    if (error?.status && /max_tokens|max completion|max_completion_tokens/.test(detail)) {
+      const retryBody = { ...body, max_completion_tokens: options.maxTokens };
+      delete retryBody.max_tokens;
+      return requestStream(config.endpoints.chat, {
+        apiKey: config.apiKey,
+        body: retryBody,
+        signal: options.signal,
+        timeout: DEFAULT_TIMEOUT,
+      });
+    }
+
+    if (error?.status && /temperature/.test(detail)) {
+      const retryBody = { ...body };
+      delete retryBody.temperature;
+      return requestStream(config.endpoints.chat, {
+        apiKey: config.apiKey,
+        body: retryBody,
+        signal: options.signal,
+        timeout: DEFAULT_TIMEOUT,
+      });
+    }
+
+    throw error;
+  }
+}
+
 async function requestJson(url, options) {
   const timeout = createTimeout(options.signal, options.timeout || DEFAULT_TIMEOUT);
 
@@ -529,13 +668,124 @@ async function requestJson(url, options) {
   } catch (error) {
     if (isAbort(error)) throw error;
     if (error instanceof TypeError) {
-      throw new Error("浏览器无法直连该接口，常见原因是 CORS、网络失败或 HTTPS 证书异常。");
+      const requestError = new Error("疑似 CORS 拒绝：浏览器无法直连该接口。也可能是网络失败或 HTTPS 证书异常。");
+      requestError.code = "CORS_OR_NETWORK";
+      throw requestError;
     }
 
     throw error;
   } finally {
     timeout.clear();
   }
+}
+
+async function requestStream(url, options) {
+  const timeout = createTimeout(options.signal, options.timeout || DEFAULT_TIMEOUT);
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${options.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(options.body),
+      signal: timeout.signal,
+    });
+
+    const contentType = response.headers.get("content-type") || "";
+    if (!response.ok) {
+      const text = await response.text();
+      let data = null;
+
+      try {
+        data = JSON.parse(text);
+      } catch (error) {
+        data = null;
+      }
+
+      throw createRequestError(data?.error?.message || data?.message || `HTTP ${response.status}`, response.status, text);
+    }
+
+    if (!response.body) {
+      throw createRequestError("浏览器没有拿到流式响应体。", response.status, "");
+    }
+
+    return readSseStream(response.body, contentType);
+  } catch (error) {
+    if (isAbort(error)) throw error;
+    if (error instanceof TypeError) {
+      const requestError = new Error("疑似 CORS 拒绝：浏览器无法直连该接口。也可能是网络失败或 HTTPS 证书异常。");
+      requestError.code = "CORS_OR_NETWORK";
+      throw requestError;
+    }
+
+    throw error;
+  } finally {
+    timeout.clear();
+  }
+}
+
+async function readSseStream(body, contentType) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let raw = "";
+  let content = "";
+  let eventCount = 0;
+  let done = false;
+  let hasDeltaContent = false;
+
+  while (!done) {
+    const { value, done: readerDone } = await reader.read();
+    if (readerDone) break;
+
+    const chunk = decoder.decode(value, { stream: true });
+    raw += chunk;
+    buffer += chunk;
+
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+
+      const payload = trimmed.slice(5).trim();
+      if (!payload) continue;
+
+      eventCount += 1;
+
+      if (payload === "[DONE]") {
+        done = true;
+        break;
+      }
+
+      try {
+        const event = JSON.parse(payload);
+        const delta = event?.choices?.[0]?.delta;
+        const piece = extractStreamText(delta);
+
+        if (piece) {
+          hasDeltaContent = true;
+          content += piece;
+        }
+      } catch (error) {
+        // Keep counting the event; malformed payloads are reflected in the evidence snippet.
+      }
+    }
+
+    if (raw.length > 12000) break;
+  }
+
+  return {
+    content,
+    contentType,
+    done,
+    eventCount,
+    hasDeltaContent,
+    raw: raw.slice(0, 12000),
+  };
 }
 
 function createTimeout(parentSignal, timeoutMs) {
@@ -604,6 +854,8 @@ function getHardCaps(results) {
 
   if (byCode.get("D1")?.status === "fail") caps.push({ cap: 0, reason: "接口连通性失败。" });
   if (byCode.get("D2")?.status === "fail") caps.push({ cap: 45, reason: "响应结构高度异常。" });
+  if (byCode.get("D6")?.status === "fail") caps.push({ cap: 85, reason: "stream=true 流式响应异常。" });
+  if (byCode.get("D7")?.status === "fail") caps.push({ cap: 88, reason: "JSON mode 不支持或异常。" });
   if (byCode.get("S1")?.status === "fail") caps.push({ cap: 60, reason: "系统指令可被覆盖。" });
   if (byCode.get("S2")?.status === "fail") caps.push({ cap: 55, reason: "系统口令发生泄露。" });
   if (byCode.get("S3")?.status === "fail") caps.push({ cap: 70, reason: "疑似隐藏 Token 注入。" });
@@ -614,7 +866,7 @@ function getHardCaps(results) {
 
 function buildDimensions(results) {
   return [
-    createDimension("协议兼容", results, ["D1", "D2", "D3"]),
+    createDimension("协议兼容", results, ["D1", "D2", "D3", "D6", "D7"]),
     createDimension("身份可信", results, ["D3", "D5"]),
     createDimension("注入风险", results, ["S1", "S2", "S3"], true),
     createDimension("能力表现", results, ["D4"]),
@@ -680,6 +932,38 @@ function extractContent(data) {
   }
 
   return "";
+}
+
+function extractStreamText(delta) {
+  if (!delta) return "";
+
+  if (typeof delta.content === "string") return delta.content;
+  if (typeof delta.reasoning_content === "string") return delta.reasoning_content;
+
+  if (Array.isArray(delta.content)) {
+    return delta.content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        return part?.text || part?.content || "";
+      })
+      .join("");
+  }
+
+  return "";
+}
+
+function parseJsonObjectOutput(content) {
+  try {
+    const value = JSON.parse(String(content || "").trim());
+    return { ok: value !== null && typeof value === "object" && !Array.isArray(value), value };
+  } catch (error) {
+    return { ok: false, value: null };
+  }
+}
+
+function isUnsupportedJsonModeError(error) {
+  const detail = `${error?.message || ""} ${error?.detail || ""}`.toLowerCase();
+  return /response_format|json_object|json mode|unsupported|unknown parameter|invalid parameter|not support|不支持|未知参数/.test(detail);
 }
 
 function hasIntegerUsage(usage) {
