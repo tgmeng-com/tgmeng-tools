@@ -1,8 +1,16 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { fetchOpenAIModels, runApiPurityCheck } from "./lib/apiPurity.js";
 import { runTransformTask } from "./lib/transform.js";
 
 const tools = [
+  {
+    key: "api-purity",
+    title: "中转站纯度检测",
+    icon: "shield",
+    group: "AI工具",
+    description: "浏览器直连 OpenAI 兼容接口，检测模型身份、协议指纹和隐藏注入风险。",
+  },
   {
     key: "json",
     title: "JSON 格式化",
@@ -20,6 +28,7 @@ const tools = [
 ];
 
 const groupOrder = ["AI工具", "开发工具"];
+const defaultTool = "api-purity";
 
 const samples = {
   base64: "糖果梦工具箱",
@@ -33,15 +42,16 @@ const storageKeys = {
   collapsedGroups: "tgmeng-tools.collapsed-groups",
 };
 
-const activeTool = ref("base64");
+const activeTool = ref(defaultTool);
 const search = ref("");
 const sidebarOpen = ref(false);
 const sidebarCollapsed = ref(localStorage.getItem(storageKeys.sidebarCollapsed) === "true");
 const collapsedGroups = reactive(loadCollapsedGroups());
-const busy = reactive({ base64: false, json: false });
+const busy = reactive({ base64: false, json: false, apiPurity: false, apiModels: false });
 const feedback = reactive({
   base64: { message: "", type: "" },
   json: { message: "", type: "" },
+  apiPurity: { message: "", type: "" },
 });
 const meta = reactive({
   base64Input: 0,
@@ -57,11 +67,28 @@ const jsonOutput = ref(null);
 const jsonTree = ref(null);
 const workspace = ref(null);
 const jsonIndent = ref(2);
+const apiPurityForm = reactive({
+  baseUrl: "",
+  apiKey: "",
+  model: "",
+  showKey: false,
+});
+const apiPurityProgress = reactive({
+  completed: 0,
+  total: 0,
+  activeName: "",
+});
+const apiPurityReport = ref(null);
+const apiProbeRows = ref([]);
+const apiModels = ref([]);
+const apiModelsFetched = ref(false);
+const modelListOpen = ref(false);
 
 let worker = null;
 let workerSeq = 0;
 let metaFrame = 0;
 let jsonActionSeq = 0;
+let apiPurityController = null;
 const pendingJobs = new Map();
 
 const activeToolConfig = computed(() => {
@@ -71,6 +98,18 @@ const activeToolConfig = computed(() => {
 const activeTitle = computed(() => activeToolConfig.value.title);
 const activeGroup = computed(() => activeToolConfig.value.group);
 const activeDescription = computed(() => activeToolConfig.value.description);
+const apiPurityPercent = computed(() => {
+  if (!apiPurityProgress.total) return 0;
+  return Math.round((apiPurityProgress.completed / apiPurityProgress.total) * 100);
+});
+const apiPurityCanRun = computed(() => {
+  return (
+    apiPurityForm.baseUrl.trim() &&
+    apiPurityForm.apiKey.trim() &&
+    apiPurityForm.model.trim() &&
+    !busy.apiPurity
+  );
+});
 
 const filteredGroups = computed(() => {
   const term = search.value.trim().toLowerCase();
@@ -100,6 +139,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener("popstate", handleRouteChange);
   document.removeEventListener("keydown", handleKeydown);
+  stopApiPurityCheck();
 
   if (worker) {
     worker.terminate();
@@ -114,7 +154,7 @@ function getInitialTool() {
   const fromStorage = localStorage.getItem(storageKeys.activeTool);
   if (tools.some((tool) => tool.key === fromPath)) return fromPath;
   if (tools.some((tool) => tool.key === fromStorage)) return fromStorage;
-  return "base64";
+  return defaultTool;
 }
 
 function activateTool(tool, updatePath = true) {
@@ -135,8 +175,8 @@ function handleRouteChange() {
   if (tools.some((item) => item.key === tool)) {
     activateTool(tool, false);
   } else {
-    activateTool("base64", false);
-    syncPath("base64");
+    activateTool(defaultTool, false);
+    syncPath(defaultTool);
   }
 }
 
@@ -577,6 +617,185 @@ function isJsonContainer(value) {
   return value !== null && typeof value === "object";
 }
 
+async function startApiPurityCheck() {
+  if (!apiPurityForm.baseUrl.trim() || !apiPurityForm.apiKey.trim() || !apiPurityForm.model.trim()) {
+    setFeedback("apiPurity", "请先填写 Base URL、API Key 和模型名称。", "warning");
+    return;
+  }
+
+  stopApiPurityCheck();
+  apiPurityController = new AbortController();
+  busy.apiPurity = true;
+  apiPurityReport.value = null;
+  apiProbeRows.value = [];
+  apiPurityProgress.completed = 0;
+  apiPurityProgress.total = 0;
+  apiPurityProgress.activeName = "准备检测";
+  setFeedback("apiPurity", "检测进行中...");
+
+  try {
+    const report = await runApiPurityCheck(
+      {
+        baseUrl: apiPurityForm.baseUrl,
+        apiKey: apiPurityForm.apiKey,
+        model: apiPurityForm.model,
+      },
+      {
+        signal: apiPurityController.signal,
+        onProgress(event) {
+          apiPurityProgress.completed = event.completed;
+          apiPurityProgress.total = event.total;
+          apiPurityProgress.activeName = event.activeName || "";
+
+          if (event.result) {
+            apiProbeRows.value = [...apiProbeRows.value, event.result];
+          }
+        },
+      },
+    );
+
+    apiPurityReport.value = report;
+    apiProbeRows.value = report.probes;
+    setFeedback("apiPurity", `检测完成，用时 ${formatDuration(report.durationMs)}。`, report.level.tone);
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      setFeedback("apiPurity", "检测已停止。", "warning");
+    } else {
+      setFeedback("apiPurity", error.message || "检测失败。", "error");
+    }
+  } finally {
+    busy.apiPurity = false;
+    apiPurityController = null;
+    apiPurityProgress.activeName = "";
+  }
+}
+
+function stopApiPurityCheck() {
+  if (apiPurityController) {
+    apiPurityController.abort();
+    apiPurityController = null;
+  }
+}
+
+async function fetchApiModelList() {
+  if (!apiPurityForm.baseUrl.trim() || !apiPurityForm.apiKey.trim()) {
+    setFeedback("apiPurity", "请先填写 Base URL 和 API Key。", "warning");
+    return;
+  }
+
+  busy.apiModels = true;
+  apiModels.value = [];
+  apiModelsFetched.value = false;
+  modelListOpen.value = false;
+  setFeedback("apiPurity", "正在获取模型列表...");
+
+  try {
+    const models = await fetchOpenAIModels({
+      baseUrl: apiPurityForm.baseUrl,
+      apiKey: apiPurityForm.apiKey,
+      model: apiPurityForm.model || "model",
+    });
+    apiModels.value = models.slice(0, 80);
+
+    if (!apiPurityForm.model && models[0]) {
+      apiPurityForm.model = models[0];
+    }
+
+    setFeedback("apiPurity", models.length ? `已获取 ${models.length} 个模型。` : "模型列表为空。", models.length ? "success" : "warning");
+    apiModelsFetched.value = true;
+    modelListOpen.value = models.length > 0;
+  } catch (error) {
+    apiModelsFetched.value = true;
+    setFeedback("apiPurity", error.message || "获取模型列表失败。", "error");
+  } finally {
+    busy.apiModels = false;
+  }
+}
+
+function selectApiModel(model) {
+  if (!model) return;
+
+  apiPurityForm.model = model;
+  modelListOpen.value = false;
+  setFeedback("apiPurity", `已选择 ${model}。`, "success");
+}
+
+function toggleModelList() {
+  if (!apiModels.value.length) return;
+
+  modelListOpen.value = !modelListOpen.value;
+}
+
+function clearApiPurity() {
+  stopApiPurityCheck();
+  apiPurityForm.baseUrl = "";
+  apiPurityForm.apiKey = "";
+  apiPurityForm.model = "";
+  apiPurityForm.showKey = false;
+  apiPurityReport.value = null;
+  apiProbeRows.value = [];
+  apiModels.value = [];
+  apiModelsFetched.value = false;
+  modelListOpen.value = false;
+  apiPurityProgress.completed = 0;
+  apiPurityProgress.total = 0;
+  apiPurityProgress.activeName = "";
+  setFeedback("apiPurity", "已清空。", "success");
+}
+
+function setApiPuritySample() {
+  apiPurityForm.baseUrl = "https://api.openai.com/v1/chat/completions";
+  apiPurityForm.model = "gpt-5.5";
+  apiPurityForm.apiKey = "";
+  apiPurityReport.value = null;
+  apiProbeRows.value = [];
+  apiModels.value = [];
+  apiModelsFetched.value = false;
+  modelListOpen.value = false;
+  setFeedback("apiPurity", "已填入示例地址，请替换为临时测试 Key。", "success");
+}
+
+async function copyApiPurityReport() {
+  if (!apiPurityReport.value) {
+    setFeedback("apiPurity", "没有可复制的报告。", "warning");
+    return;
+  }
+
+  const report = apiPurityReport.value;
+  const lines = [
+    `TGMENG TOOLS 中转站纯度检测`,
+    `模型：${apiPurityForm.model}`,
+    `评分：${report.score}/100 ${report.level.label}`,
+    `结论：${report.summary}`,
+    "",
+    ...report.probes.map((probe) => `${probe.code} ${probe.name}：${statusText(probe.status)}，${probe.summary}`),
+  ];
+
+  try {
+    await navigator.clipboard.writeText(lines.join("\n"));
+    setFeedback("apiPurity", "报告已复制。", "success");
+  } catch (error) {
+    setFeedback("apiPurity", "复制失败。", "error");
+  }
+}
+
+function statusText(status) {
+  const labels = {
+    pass: "通过",
+    warn: "疑点",
+    fail: "失败",
+    skip: "跳过",
+  };
+
+  return labels[status] || status;
+}
+
+function formatDuration(durationMs) {
+  if (!Number.isFinite(durationMs)) return "--";
+  if (durationMs < 1000) return `${durationMs}ms`;
+  return `${(durationMs / 1000).toFixed(1)}s`;
+}
+
 async function copyText(textarea, tool) {
   if (!textarea.value) {
     setFeedback(tool, "没有可复制的内容。", "warning");
@@ -645,6 +864,35 @@ async function copyText(textarea, tool) {
     </symbol>
     <symbol id="icon-wrench" viewBox="0 0 24 24">
       <path d="M14.7 6.3a5 5 0 0 0 6.6 6.6L12 22 2 12l9.1-9.3a5 5 0 0 0 3.6 3.6Z" />
+    </symbol>
+    <symbol id="icon-play" viewBox="0 0 24 24">
+      <path d="M5 5a2 2 0 0 1 3-1.7l11 7a2 2 0 0 1 0 3.4l-11 7A2 2 0 0 1 5 19V5Z" />
+    </symbol>
+    <symbol id="icon-stop-circle" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10" />
+      <rect x="9" y="9" width="6" height="6" rx="1" />
+    </symbol>
+    <symbol id="icon-list" viewBox="0 0 24 24">
+      <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
+    </symbol>
+    <symbol id="icon-eye" viewBox="0 0 24 24">
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+      <circle cx="12" cy="12" r="3" />
+    </symbol>
+    <symbol id="icon-eye-off" viewBox="0 0 24 24">
+      <path d="m3 3 18 18M10.6 10.6A3 3 0 0 0 12 15a3 3 0 0 0 2.4-1.2M9.9 5.3A10 10 0 0 1 12 5c6.5 0 10 7 10 7a18.3 18.3 0 0 1-2.6 3.6M6.2 6.8C3.5 8.5 2 12 2 12s3.5 7 10 7a9.7 9.7 0 0 0 4.3-1" />
+    </symbol>
+    <symbol id="icon-shield-check" viewBox="0 0 24 24">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" />
+      <path d="m9 12 2 2 4-4" />
+    </symbol>
+    <symbol id="icon-alert-triangle" viewBox="0 0 24 24">
+      <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
+      <path d="M12 9v4M12 17h.01" />
+    </symbol>
+    <symbol id="icon-github" viewBox="0 0 24 24">
+      <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3.4-.4 7-1.7 7-7.5A5.8 5.8 0 0 0 19.3 3 5.4 5.4 0 0 0 19.2.1S17.9-.3 15 1.7a14.4 14.4 0 0 0-7.5 0C4.6-.3 3.3.1 3.3.1A5.4 5.4 0 0 0 3.2 3 5.8 5.8 0 0 0 1.5 7c0 5.8 3.6 7.1 7 7.5a4.3 4.3 0 0 0-.9 2.4V22" />
+      <path d="M9 18c-4.5 2-5-2-7-2" />
     </symbol>
   </svg>
 
@@ -730,10 +978,228 @@ async function copyText(textarea, tool) {
             {{ activeDescription }}
           </p>
         </div>
-        <button class="icon-button topbar-action" type="button" aria-label="切换深浅色" @click="toggleTheme">
-          <svg class="icon"><use href="#icon-moon"></use></svg>
-        </button>
+        <div class="topbar-actions">
+          <a
+            class="icon-button"
+            href="https://github.com/tgmeng-com/tgmeng-tools"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="打开 GitHub 仓库"
+            title="GitHub"
+          >
+            <svg class="icon" aria-hidden="true"><use href="#icon-github"></use></svg>
+          </a>
+          <button class="icon-button" type="button" aria-label="切换深浅色" @click="toggleTheme">
+            <svg class="icon"><use href="#icon-moon"></use></svg>
+          </button>
+        </div>
       </header>
+
+      <section v-show="activeTool === 'api-purity'" class="tool-view api-purity-view" aria-labelledby="apiPurityTitle">
+        <h2 id="apiPurityTitle" class="sr-only">中转站纯度检测</h2>
+
+        <div class="api-purity-layout">
+          <section class="work-panel api-config-panel" aria-labelledby="apiConfigLabel">
+            <div class="panel-head">
+              <label id="apiConfigLabel">检测配置</label>
+              <span>OpenAI 兼容</span>
+            </div>
+
+            <div class="api-form">
+              <label class="form-field" for="apiBaseUrl">
+                <span>Base URL</span>
+                <input
+                  id="apiBaseUrl"
+                  v-model="apiPurityForm.baseUrl"
+                  class="form-input"
+                  type="url"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="https://api.openai.com/v1/chat/completions"
+                />
+              </label>
+
+              <label class="form-field" for="apiKey">
+                <span>API Key</span>
+                <span class="secret-field">
+                  <input
+                    id="apiKey"
+                    v-model="apiPurityForm.apiKey"
+                    class="form-input"
+                    :type="apiPurityForm.showKey ? 'text' : 'password'"
+                    autocomplete="one-time-code"
+                    autocorrect="off"
+                    autocapitalize="off"
+                    spellcheck="false"
+                    data-lpignore="true"
+                    data-1p-ignore="true"
+                    placeholder="sk-..."
+                  />
+                  <button
+                    class="field-icon-button"
+                    type="button"
+                    :aria-label="apiPurityForm.showKey ? '隐藏 API Key' : '显示 API Key'"
+                    @click="apiPurityForm.showKey = !apiPurityForm.showKey"
+                  >
+                    <svg class="icon" aria-hidden="true">
+                      <use :href="apiPurityForm.showKey ? '#icon-eye-off' : '#icon-eye'"></use>
+                    </svg>
+                  </button>
+                </span>
+              </label>
+
+              <div class="form-field">
+                <div class="form-label-row">
+                  <label for="apiModel">模型</label>
+                  <button class="inline-action-button" type="button" :disabled="busy.apiPurity || busy.apiModels" @click="fetchApiModelList">
+                    <svg class="icon" aria-hidden="true"><use href="#icon-list"></use></svg>
+                    {{ busy.apiModels ? "拉取中" : "拉取模型列表" }}
+                    <span
+                      v-if="apiModelsFetched"
+                      class="model-count"
+                      :class="apiModels.length ? 'is-ok' : 'is-empty'"
+                    >
+                      {{ apiModels.length }}可用
+                    </span>
+                  </button>
+                </div>
+                <div class="model-combobox" :class="{ 'is-open': modelListOpen }">
+                  <input
+                    id="apiModel"
+                    v-model="apiPurityForm.model"
+                    class="form-input"
+                    type="text"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="gpt-5.5"
+                    aria-autocomplete="list"
+                    :aria-expanded="modelListOpen"
+                    aria-controls="apiModelList"
+                    @input="modelListOpen = false"
+                    @keydown.down.prevent="modelListOpen = apiModels.length > 0"
+                    @keydown.escape="modelListOpen = false"
+                  />
+                  <button
+                    class="field-icon-button model-dropdown-button"
+                    type="button"
+                    aria-label="展开模型列表"
+                    :disabled="!apiModels.length"
+                    @click="toggleModelList"
+                  >
+                    <svg class="icon" aria-hidden="true"><use href="#icon-chevron-right"></use></svg>
+                  </button>
+                  <div v-if="modelListOpen && apiModels.length" id="apiModelList" class="model-menu" role="listbox">
+                    <button
+                      v-for="model in apiModels"
+                      :key="model"
+                      class="model-option"
+                      type="button"
+                      role="option"
+                      :aria-selected="apiPurityForm.model === model"
+                      @click="selectApiModel(model)"
+                    >
+                      {{ model }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="api-note">
+              Key 只保存在当前页面内存；检测会发起多次真实请求，建议使用临时低额度 Key。
+            </div>
+          </section>
+
+          <section class="work-panel api-result-panel" aria-labelledby="apiResultLabel">
+            <div class="panel-head">
+              <label id="apiResultLabel">检测结果</label>
+              <span>{{ apiPurityReport ? formatDuration(apiPurityReport.durationMs) : `${apiPurityPercent}%` }}</span>
+            </div>
+
+            <div class="purity-overview" :class="apiPurityReport && `is-${apiPurityReport.level.tone}`">
+              <div class="score-meter" aria-label="纯度评分">
+                <strong>{{ apiPurityReport ? apiPurityReport.score : "--" }}</strong>
+                <span>/100</span>
+              </div>
+              <div class="score-copy">
+                <strong>{{ apiPurityReport ? apiPurityReport.level.label : "等待检测" }}</strong>
+                <p>{{ apiPurityReport ? apiPurityReport.summary : "填写配置后开始检测，结果会按探针逐项更新。" }}</p>
+              </div>
+            </div>
+
+            <div v-if="busy.apiPurity || apiProbeRows.length" class="probe-progress" aria-live="polite">
+              <div class="progress-track">
+                <span :style="{ width: `${apiPurityPercent}%` }"></span>
+              </div>
+              <p>
+                {{ busy.apiPurity && apiPurityProgress.activeName ? `正在检测：${apiPurityProgress.activeName}` : `已完成 ${apiPurityProgress.completed}/${apiPurityProgress.total || apiProbeRows.length}` }}
+              </p>
+            </div>
+
+            <div v-if="apiPurityReport?.dimensions?.length" class="dimension-grid">
+              <div v-for="dimension in apiPurityReport.dimensions" :key="dimension.label" class="dimension-item">
+                <span>{{ dimension.label }}</span>
+                <strong>{{ dimension.value }}</strong>
+              </div>
+            </div>
+
+            <div v-if="apiPurityReport?.redFlags?.length" class="red-flag-list">
+              <div v-for="flag in apiPurityReport.redFlags" :key="flag" class="red-flag">
+                <svg class="icon" aria-hidden="true"><use href="#icon-alert-triangle"></use></svg>
+                <span>{{ flag }}</span>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="command-bar api-command-bar" aria-label="纯度检测操作">
+          <div class="primary-actions">
+            <button class="primary-button" type="button" :disabled="!apiPurityCanRun" @click="startApiPurityCheck">
+              <svg class="icon" aria-hidden="true"><use href="#icon-play"></use></svg>
+              开始检测
+            </button>
+            <button v-if="busy.apiPurity" class="secondary-button" type="button" @click="stopApiPurityCheck">
+              <svg class="icon" aria-hidden="true"><use href="#icon-stop-circle"></use></svg>
+              停止
+            </button>
+            <div class="compact-actions" aria-label="纯度检测高频操作">
+              <button class="compact-button" type="button" :disabled="busy.apiPurity" @click="setApiPuritySample">
+                示例
+              </button>
+              <button class="compact-button" type="button" :disabled="busy.apiPurity" @click="clearApiPurity">
+                清空
+              </button>
+            </div>
+          </div>
+          <div class="utility-actions">
+            <button class="icon-text-button" type="button" :disabled="busy.apiPurity || !apiPurityReport" @click="copyApiPurityReport">
+              <svg class="icon" aria-hidden="true"><use href="#icon-copy"></use></svg>
+              复制报告
+            </button>
+          </div>
+        </div>
+
+        <div v-if="apiProbeRows.length" class="probe-list" aria-label="探针结果">
+          <article v-for="probe in apiProbeRows" :key="probe.code" class="probe-row" :class="`is-${probe.status}`">
+            <span class="probe-badge">{{ statusText(probe.status) }}</span>
+            <div class="probe-main">
+              <div class="probe-title">
+                <strong>{{ probe.code }} · {{ probe.name }}</strong>
+                <span>{{ probe.status === "skip" ? "--" : probe.score }}</span>
+              </div>
+              <p>{{ probe.summary }}</p>
+              <ul v-if="probe.evidence.length" class="probe-evidence">
+                <li v-for="item in probe.evidence.slice(0, 3)" :key="item">{{ item }}</li>
+              </ul>
+            </div>
+            <span class="probe-latency">{{ formatDuration(probe.latencyMs) }}</span>
+          </article>
+        </div>
+
+        <p class="feedback" :class="feedback.apiPurity.type && `is-${feedback.apiPurity.type}`" role="status" aria-live="polite">
+          {{ feedback.apiPurity.message }}
+        </p>
+      </section>
 
       <section v-show="activeTool === 'base64'" class="tool-view" aria-labelledby="base64Title">
         <h2 id="base64Title" class="sr-only">Base64 加解密</h2>
