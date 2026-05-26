@@ -10,6 +10,8 @@ const tools = [
     icon: "shield",
     group: "AI工具",
     description: "浏览器直连 OpenAI 兼容接口，检测模型身份、协议指纹和隐藏注入风险。",
+    seoDescription: "TGMENG TOOLS 中转站纯度检测，纯前端检测 OpenAI 兼容接口的模型身份、协议指纹、流式响应和 JSON mode。",
+    keywords: "中转站纯度检测,OpenAI 兼容接口,AI 接口检测,流式检测,JSON mode,TGMENG TOOLS",
   },
   {
     key: "json",
@@ -17,6 +19,8 @@ const tools = [
     icon: "braces",
     group: "开发工具",
     description: "格式化、压缩和校验 JSON。",
+    seoDescription: "TGMENG TOOLS JSON 格式化工具，纯前端格式化、压缩、校验 JSON，并支持树形展开查看。",
+    keywords: "JSON 格式化,JSON 压缩,JSON 校验,JSON 树形查看,TGMENG TOOLS",
   },
   {
     key: "base64",
@@ -24,11 +28,19 @@ const tools = [
     icon: "binary",
     group: "开发工具",
     description: "UTF-8 文本与 Base64 互转。",
+    seoDescription: "TGMENG TOOLS Base64 加解密工具，纯前端完成 UTF-8 文本与 Base64 的编码和解码。",
+    keywords: "Base64 加解密,Base64 编码,Base64 解码,UTF-8,TGMENG TOOLS",
   },
 ];
 
 const groupOrder = ["AI工具", "开发工具"];
 const defaultTool = "api-purity";
+const siteOrigin = "https://tools.tgmeng.com";
+const siteName = "TGMENG TOOLS";
+const siteTitle = "TGMENG TOOLS - 糖果梦工具箱";
+const siteDescription = "TGMENG TOOLS 是一个个人自用的小工具站，提供中转站纯度检测、JSON 格式化和 Base64 加解密等纯前端工具。";
+const siteKeywords = "TGMENG TOOLS,糖果梦工具箱,中转站纯度检测,JSON 格式化,Base64 加解密,纯前端工具";
+const siteImage = `${siteOrigin}/assets/logo.png`;
 
 const samples = {
   base64: "糖果梦工具箱",
@@ -389,6 +401,7 @@ function activateTool(tool, updatePath = true) {
     history.pushState(null, "", getToolPath(tool));
   }
 
+  updateSeo(tool);
   sidebarOpen.value = false;
 }
 
@@ -410,6 +423,48 @@ function syncPath(tool) {
 
 function getToolPath(tool) {
   return `/${tool}`;
+}
+
+function updateSeo(toolKey) {
+  const tool = tools.find((item) => item.key === toolKey) || tools[0];
+  const title = tool.key === defaultTool ? siteTitle : `${tool.title} - ${siteName}`;
+  const description = tool.seoDescription || siteDescription;
+  const keywords = tool.keywords ? `${tool.keywords},${siteKeywords}` : siteKeywords;
+  const url = `${siteOrigin}${getToolPath(tool.key)}`;
+
+  document.title = title;
+  setMeta("name", "description", description);
+  setMeta("name", "keywords", keywords);
+  setMeta("property", "og:title", title);
+  setMeta("property", "og:description", description);
+  setMeta("property", "og:url", url);
+  setMeta("property", "og:image", siteImage);
+  setMeta("name", "twitter:title", title);
+  setMeta("name", "twitter:description", description);
+  setMeta("name", "twitter:image", siteImage);
+  setCanonical(url);
+}
+
+function setMeta(attribute, key, content) {
+  let meta = document.head.querySelector(`meta[${attribute}="${key}"]`);
+  if (!meta) {
+    meta = document.createElement("meta");
+    meta.setAttribute(attribute, key);
+    document.head.append(meta);
+  }
+
+  meta.setAttribute("content", content);
+}
+
+function setCanonical(url) {
+  let link = document.head.querySelector('link[rel="canonical"]');
+  if (!link) {
+    link = document.createElement("link");
+    link.setAttribute("rel", "canonical");
+    document.head.append(link);
+  }
+
+  link.setAttribute("href", url);
 }
 
 function loadCollapsedGroups() {
