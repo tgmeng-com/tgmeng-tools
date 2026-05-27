@@ -14,6 +14,15 @@ const tools = [
     keywords: "中转站纯度检测,OpenAI 兼容接口,AI 接口检测,流式检测,JSON mode,TGMENG TOOLS",
   },
   {
+    key: "codex-pets",
+    title: "Codex 宠物",
+    icon: "sparkles",
+    group: "AI工具",
+    description: "下载 Codex 自定义宠物包。",
+    seoDescription: "TGMENG TOOLS Codex 宠物下载页，提供可下载安装到 Codex 的自定义宠物包。",
+    keywords: "Codex 宠物,Codex pet,自定义宠物,TGMENG TOOLS",
+  },
+  {
     key: "json",
     title: "JSON 格式化",
     icon: "braces",
@@ -42,6 +51,41 @@ const siteDescription = "TGMENG TOOLS 是一个个人自用的小工具站，提
 const siteKeywords = "TGMENG TOOLS,糖果梦工具箱,中转站纯度检测,JSON 格式化,Base64 加解密,纯前端工具";
 const siteImage = `${siteOrigin}/assets/logo.png`;
 
+const petPackages = [
+  {
+    id: "hongkongdoll",
+    name: "HongKongDoll",
+    description: "黑色面罩风格的 chibi 数字宠物。",
+    preview: "/pets/hongkongdoll.webp",
+    download: "/pets/hongkongdoll.zip",
+    bytes: 1361547,
+  },
+  {
+    id: "dolli",
+    name: "Dolli",
+    description: "可爱的 chibi 像素风陪伴宠物。",
+    preview: "/pets/dolli.webp",
+    download: "/pets/dolli.zip",
+    bytes: 1735161,
+  },
+  {
+    id: "rising-lion",
+    name: "Rising Lion",
+    description: "复古桌面感的小狮子宠物。",
+    preview: "/pets/rising-lion.webp",
+    download: "/pets/rising-lion.zip",
+    bytes: 2148995,
+  },
+  {
+    id: "trumpet",
+    name: "Trumpet",
+    description: "西装红领带的小型 chibi 宠物。",
+    preview: "/pets/trumpet.webp",
+    download: "/pets/trumpet.zip",
+    bytes: 1911084,
+  },
+];
+
 const samples = {
   base64: "糖果梦工具箱",
   json: '{"name":"糖果梦工具箱","tools":["Base64","JSON"],"localOnly":true}',
@@ -64,6 +108,7 @@ const feedback = reactive({
   base64: { message: "", type: "" },
   json: { message: "", type: "" },
   apiPurity: { message: "", type: "" },
+  codexPets: { message: "", type: "" },
 });
 const meta = reactive({
   base64Input: 0,
@@ -79,6 +124,7 @@ const jsonOutput = ref(null);
 const jsonTree = ref(null);
 const workspace = ref(null);
 const jsonIndent = ref(2);
+const selectedPetPreview = ref(null);
 const apiPurityForm = reactive({
   baseUrl: "",
   apiKey: "",
@@ -511,6 +557,7 @@ function handleSidebarToggle() {
 
 function handleKeydown(event) {
   if (event.key === "Escape") {
+    selectedPetPreview.value = null;
     sidebarOpen.value = false;
   }
 }
@@ -1083,6 +1130,27 @@ async function copyAllCliDemos() {
   await copyCliCommand(allApiCliDemoCommand.value, "全部 CLI 示例");
 }
 
+function openPetPreview(pet) {
+  selectedPetPreview.value = pet;
+}
+
+function closePetPreview() {
+  selectedPetPreview.value = null;
+}
+
+function getPetDownloadUrl(pet) {
+  return `${siteOrigin}${pet.download}`;
+}
+
+async function copyPetDownloadLink(pet) {
+  try {
+    await navigator.clipboard.writeText(getPetDownloadUrl(pet));
+    setFeedback("codexPets", `${pet.name} 下载链接已复制。`, "success");
+  } catch (error) {
+    setFeedback("codexPets", "复制下载链接失败。", "error");
+  }
+}
+
 function getApiEndpoints(baseUrl) {
   const trimmed = baseUrl.trim().replace(/\/+$/, "");
   if (!trimmed || !/^https?:\/\//i.test(trimmed)) {
@@ -1163,6 +1231,12 @@ function formatDuration(durationMs) {
   return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return "--";
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 async function copyText(textarea, tool) {
   if (!textarea.value) {
     setFeedback(tool, "没有可复制的内容。", "warning");
@@ -1241,6 +1315,15 @@ async function copyText(textarea, tool) {
     </symbol>
     <symbol id="icon-list" viewBox="0 0 24 24">
       <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
+    </symbol>
+    <symbol id="icon-download" viewBox="0 0 24 24">
+      <path d="M12 3v12M7 10l5 5 5-5M5 21h14" />
+    </symbol>
+    <symbol id="icon-folder" viewBox="0 0 24 24">
+      <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+    </symbol>
+    <symbol id="icon-x" viewBox="0 0 24 24">
+      <path d="M18 6 6 18M6 6l12 12" />
     </symbol>
     <symbol id="icon-eye" viewBox="0 0 24 24">
       <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
@@ -1612,6 +1695,66 @@ async function copyText(textarea, tool) {
             </article>
           </div>
         </div>
+      </section>
+
+      <section v-show="activeTool === 'codex-pets'" class="tool-view codex-pets-view" aria-labelledby="codexPetsTitle">
+        <h2 id="codexPetsTitle" class="sr-only">Codex 宠物</h2>
+
+        <section class="pet-install-panel" aria-labelledby="petInstallTitle">
+          <div class="pet-install-copy">
+            <h3 id="petInstallTitle">安装方式</h3>
+            <p>
+              下载对应的宠物包，解压到 <code>~\.codex\pets</code> 文件夹中，然后在 Codex 中进入
+              <strong>设置 - 外观 - 宠物</strong> 选择对应宠物；在对话框输入 <code>/</code>，选择宠物即可。
+            </p>
+          </div>
+          <div class="pet-path-chip" aria-label="安装目录">
+            <svg class="icon" aria-hidden="true"><use href="#icon-folder"></use></svg>
+            <span>~\.codex\pets</span>
+          </div>
+        </section>
+
+        <div class="pet-package-grid" aria-label="宠物包下载列表">
+          <article v-for="pet in petPackages" :key="pet.id" class="pet-card">
+            <button class="pet-preview" type="button" :aria-label="`放大查看 ${pet.name} 预览图`" @click="openPetPreview(pet)">
+              <img :src="pet.preview" :alt="`${pet.name} 宠物预览`" loading="lazy" decoding="async" />
+            </button>
+            <div class="pet-card-body">
+              <div class="pet-card-title">
+                <strong>{{ pet.name }}</strong>
+                <span>{{ formatBytes(pet.bytes) }}</span>
+              </div>
+              <p>{{ pet.description }}</p>
+              <div class="pet-card-actions">
+                <a class="primary-button pet-download-button" :href="pet.download" target="_blank" rel="noopener noreferrer">
+                  <svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg>
+                  打开下载
+                </a>
+                <button class="compact-button" type="button" @click="copyPetDownloadLink(pet)">
+                  复制链接
+                </button>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <p class="feedback" :class="feedback.codexPets.type && `is-${feedback.codexPets.type}`" role="status" aria-live="polite">
+          {{ feedback.codexPets.message }}
+        </p>
+
+        <Transition name="pet-lightbox-motion">
+          <div v-if="selectedPetPreview" class="pet-lightbox" role="dialog" aria-modal="true" :aria-label="`${selectedPetPreview.name} 预览图`" @click.self="closePetPreview">
+            <div class="pet-lightbox-panel">
+              <div class="pet-lightbox-head">
+                <strong>{{ selectedPetPreview.name }}</strong>
+                <button class="icon-button" type="button" aria-label="关闭预览图" @click="closePetPreview">
+                  <svg class="icon" aria-hidden="true"><use href="#icon-x"></use></svg>
+                </button>
+              </div>
+              <img :src="selectedPetPreview.preview" :alt="`${selectedPetPreview.name} 宠物大图预览`" />
+            </div>
+          </div>
+        </Transition>
       </section>
 
       <section v-show="activeTool === 'base64'" class="tool-view" aria-labelledby="base64Title">
