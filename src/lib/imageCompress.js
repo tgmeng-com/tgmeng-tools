@@ -2,6 +2,8 @@ import { encode as encodeAvif } from "@jsquash/avif";
 import { encode as encodeJpeg } from "@jsquash/jpeg";
 import { optimise as optimisePng } from "@jsquash/oxipng";
 import { encode as encodeWebp } from "@jsquash/webp";
+import { applyPalette, GIFEncoder, prequantize, quantize } from "gifenc/dist/gifenc.esm.js";
+import { decompressFrames, parseGIF } from "gifuct-js";
 
 const MAX_COMPARE_EDGE = 720;
 const MAX_ANALYZE_EDGE = 420;
@@ -12,6 +14,7 @@ const MIME_EXTENSIONS = {
   "image/webp": "webp",
   "image/jpeg": "jpg",
   "image/png": "png",
+  "image/gif": "gif",
 };
 
 const MIME_LABELS = {
@@ -19,6 +22,13 @@ const MIME_LABELS = {
   "image/webp": "WebP",
   "image/jpeg": "JPEG",
   "image/png": "PNG",
+  "image/gif": "GIF",
+};
+
+const GIF_MODE_CONFIGS = {
+  careful: { maxColors: 128, roundRGB: 5, maxEdge: 960, maxPixels: 760000, minFrameDelay: 20 },
+  extreme: { maxColors: 96, roundRGB: 7, maxEdge: 760, maxPixels: 520000, minFrameDelay: 20 },
+  ultra: { maxColors: 64, roundRGB: 10, maxEdge: 520, maxPixels: 240000, minFrameDelay: 20 },
 };
 
 const MODE_CONFIGS = {
@@ -51,13 +61,244 @@ const MODE_CONFIGS = {
   },
 };
 
+async function compressGifFile(file, options = {}) {
+  const mode = MODE_CONFIGS[options.mode] ? options.mode : "ultra";
+  const config = GIF_MODE_CONFIGS[mode] || GIF_MODE_CONFIGS.ultra;
+  const startedAt = performance.now();
+  const buffer = await file.arrayBuffer();
+  const parsed = parseGIF(buffer);
+  const frames = decompressFrames(parsed, true).filter(Boolean);
+  const width = parsed.lsd?.width || 0;
+  const height = parsed.lsd?.height || 0;
+
+  if (!width || !height || !frames.length) {
+    throw new Error("GIF 动图解析失败。");
+  }
+
+  const gifCandidates = [];
+
+  for (const attempt of buildGifCompressionAttempts(config)) {
+    const candidate = encodeGifCandidate(frames, width, height, options, attempt);
+    if (candidate.blob.size > 0) {
+      gifCandidates.push(candidate);
+    }
+  }
+
+  const bestCandidate = gifCandidates.sort((left, right) => left.blob.size - right.blob.size)[0];
+  const selected = bestCandidate ? {
+    ...bestCandidate,
+    mime: "image/gif",
+    metrics: { ssim: 1, averageDelta: 0, maxDelta: 0 },
+  } : createOriginalCandidate(file);
+  const outputName = selected.original ? file.name : buildOutputName(file.name, "image/gif", {
+    outputMode: "original",
+    keepOriginalExtension: true,
+  });
+
+  return {
+    blob: selected.blob,
+    name: outputName,
+    mime: "image/gif",
+    format: "GIF",
+    originalBytes: file.size,
+    compressedBytes: selected.blob.size,
+    originalWidth: width,
+    originalHeight: height,
+    width: selected.width || width,
+    height: selected.height || height,
+    score: 100,
+    ssim: 1,
+    averageDelta: 0,
+    maxDelta: 0,
+    quality: null,
+    mode,
+    outputMode: "gif",
+    contentKind: "animation",
+    hasAlpha: true,
+    noGain: Boolean(selected.original),
+    resized: selected.width !== width || selected.height !== height,
+    frameCount: frames.length,
+    outputFrameCount: selected.outputFrameCount || frames.length,
+    durationMs: Math.round(performance.now() - startedAt),
+    candidates: gifCandidates.map((candidate) => ({
+      format: "GIF",
+      mime: "image/gif",
+      bytes: candidate.size,
+      quality: null,
+      score: 100,
+      averageDelta: 0,
+      accepted: candidate.size > 0,
+      reason: "animated-gif",
+    })),
+  };
+}
+
+function buildGifCompressionAttempts(config) {
+  return [
+    { ...config, palettePixels: 160000 },
+    {
+      ...config,
+      maxColors: Math.min(config.maxColors, 48),
+      roundRGB: config.roundRGB + 3,
+      maxEdge: Math.max(240, Math.round(config.maxEdge * 0.82)),
+      maxPixels: Math.max(90000, Math.round(config.maxPixels * 0.66)),
+      minFrameDelay: config.minFrameDelay,
+      palettePixels: 120000,
+    },
+    {
+      ...config,
+      maxColors: Math.min(config.maxColors, 32),
+      roundRGB: config.roundRGB + 6,
+      maxEdge: Math.max(180, Math.round(config.maxEdge * 0.62)),
+      maxPixels: Math.max(52000, Math.round(config.maxPixels * 0.38)),
+      minFrameDelay: config.minFrameDelay,
+      palettePixels: 90000,
+    },
+    {
+      ...config,
+      maxColors: Math.min(config.maxColors, 24),
+      roundRGB: config.roundRGB + 9,
+      maxEdge: Math.max(140, Math.round(config.maxEdge * 0.48)),
+      maxPixels: Math.max(32000, Math.round(config.maxPixels * 0.24)),
+      minFrameDelay: config.minFrameDelay,
+      palettePixels: 70000,
+    },
+  ];
+}
+
+function encodeGifCandidate(frames, width, height, options, config) {
+  const targetSize = resolveGifTargetSize(width, height, options.dimensionMode, config);
+  const framePlan = buildGifFramePlan(frames, config);
+  const delayByIndex = new Map(framePlan.map((entry) => [entry.index, entry.delay]));
+  const sourceCanvas = createCanvas(width, height);
+  const sourceContext = getCanvasContext(sourceCanvas, true);
+  const encodeCanvas = createCanvas(targetSize.width, targetSize.height);
+  const encodeContext = getCanvasContext(encodeCanvas, true);
+  const previousCanvas = createCanvas(width, height);
+  const previousContext = getCanvasContext(previousCanvas, true);
+  const patchCanvas = createCanvas(1, 1);
+  const patchContext = getCanvasContext(patchCanvas, true);
+  const outputFrames = [];
+  let previousDisposal = 0;
+  let previousDims = null;
+
+  sourceContext.clearRect(0, 0, width, height);
+
+  for (let index = 0; index < frames.length; index += 1) {
+    const frame = frames[index];
+
+    applyGifDisposal(sourceContext, previousContext, previousDisposal, previousDims);
+    previousContext.clearRect(0, 0, width, height);
+    previousContext.drawImage(sourceCanvas, 0, 0);
+
+    drawGifPatch(sourceContext, patchCanvas, patchContext, frame);
+
+    if (delayByIndex.has(index)) {
+      encodeContext.clearRect(0, 0, targetSize.width, targetSize.height);
+      encodeContext.drawImage(sourceCanvas, 0, 0, targetSize.width, targetSize.height);
+
+      const imageData = encodeContext.getImageData(0, 0, targetSize.width, targetSize.height);
+      prequantize(imageData.data, {
+        roundRGB: config.roundRGB,
+        roundAlpha: 255,
+        oneBitAlpha: true,
+      });
+      outputFrames.push({
+        data: imageData.data,
+        delay: normalizeGifDelay(delayByIndex.get(index), config),
+      });
+    }
+
+    previousDisposal = frame.disposalType || 0;
+    previousDims = frame.dims;
+  }
+
+  if (!outputFrames.length) {
+    throw new Error("GIF 动图解析失败。");
+  }
+
+  const palette = buildGifGlobalPalette(outputFrames, targetSize, config);
+  const transparentIndex = palette.findIndex((color) => color[3] !== undefined && color[3] < 128);
+  const colorDepth = getGifColorDepth(palette.length);
+  const gif = GIFEncoder();
+
+  outputFrames.forEach((frame, index) => {
+    const indexed = applyPalette(frame.data, palette, "rgba4444");
+    gif.writeFrame(indexed, targetSize.width, targetSize.height, {
+      palette: index === 0 ? palette : undefined,
+      colorDepth,
+      delay: frame.delay,
+      repeat: index === 0 ? 0 : undefined,
+      dispose: transparentIndex >= 0 ? 2 : 0,
+      transparent: transparentIndex >= 0,
+      transparentIndex: transparentIndex >= 0 ? transparentIndex : 0,
+    });
+  });
+
+  gif.finish();
+  const encoded = gif.bytes();
+  const blob = new Blob([encoded], { type: "image/gif" });
+
+  return {
+    blob,
+    size: blob.size,
+    width: targetSize.width,
+    height: targetSize.height,
+    outputFrameCount: outputFrames.length,
+  };
+}
+
+function buildGifFramePlan(frames, config) {
+  return frames.map((frame, index) => ({
+    index,
+    delay: normalizeGifDelay(getGifFrameDelay(frame?.delay), config),
+  }));
+}
+
+function buildGifGlobalPalette(outputFrames, targetSize, config) {
+  const totalPixels = targetSize.width * targetSize.height * outputFrames.length;
+  const sampleStep = Math.max(1, Math.ceil(totalPixels / (config.palettePixels || 120000)));
+  const estimatedSamples = Math.max(1, Math.ceil(totalPixels / sampleStep));
+  const sample = new Uint8ClampedArray(estimatedSamples * 4);
+  let sampleOffset = 0;
+  let pixelIndex = 0;
+
+  for (const frame of outputFrames) {
+    const { data } = frame;
+    for (let offset = 0; offset < data.length; offset += 4) {
+      if (pixelIndex % sampleStep === 0 && sampleOffset + 4 <= sample.length) {
+        sample[sampleOffset] = data[offset];
+        sample[sampleOffset + 1] = data[offset + 1];
+        sample[sampleOffset + 2] = data[offset + 2];
+        sample[sampleOffset + 3] = data[offset + 3];
+        sampleOffset += 4;
+      }
+      pixelIndex += 1;
+    }
+  }
+
+  const paletteSource = sampleOffset === sample.length ? sample : sample.slice(0, sampleOffset);
+  const palette = quantize(paletteSource, config.maxColors, {
+    format: "rgba4444",
+    clearAlpha: true,
+    clearAlphaColor: 0,
+    oneBitAlpha: true,
+  });
+
+  return palette.length ? palette : [[0, 0, 0, 255]];
+}
+
 export async function compressImageFile(file, options = {}) {
   if (!file || !file.type?.startsWith("image/")) {
     throw new Error("请选择图片文件。");
   }
 
-  if (/svg|gif/i.test(file.type)) {
-    throw new Error("暂不处理 SVG 或动图，避免把矢量/动画压成静态位图。");
+  if (isGifFile(file)) {
+    return compressGifFile(file, options);
+  }
+
+  if (/svg/i.test(file.type)) {
+    throw new Error("暂不处理 SVG，避免把矢量图压成位图。");
   }
 
   const mode = MODE_CONFIGS[options.mode] ? options.mode : "extreme";
@@ -478,6 +719,57 @@ function resolveTargetSize(width, height, dimensionMode, kind) {
   };
 }
 
+function resolveGifTargetSize(width, height, dimensionMode, config) {
+  const longest = Math.max(width, height);
+  let maxEdge = config.maxEdge;
+
+  if (dimensionMode && dimensionMode !== "smart") {
+    maxEdge = dimensionMode === "original" ? 0 : Number(dimensionMode) || maxEdge;
+  }
+
+  const edgeScale = maxEdge && longest > maxEdge ? maxEdge / longest : 1;
+  const pixelScale = width * height > config.maxPixels ? Math.sqrt(config.maxPixels / (width * height)) : 1;
+  const scale = Math.min(1, edgeScale, pixelScale);
+
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
+}
+
+function getGifFrameDelay(delay) {
+  return Math.max(20, Number(delay) || 100);
+}
+
+function normalizeGifDelay(delay, config = GIF_MODE_CONFIGS.ultra) {
+  return Math.max(config.minFrameDelay || 20, Number(delay) || 100);
+}
+
+function getGifColorDepth(colorCount) {
+  return Math.max(2, Math.ceil(Math.log2(Math.max(2, colorCount))));
+}
+
+function applyGifDisposal(context, previousContext, disposal, dims) {
+  if (disposal === 2 && dims) {
+    context.clearRect(dims.left, dims.top, dims.width, dims.height);
+    return;
+  }
+
+  if (disposal === 3) {
+    context.clearRect(0, 0, context.canvas.width, context.canvas.height);
+    context.drawImage(previousContext.canvas, 0, 0);
+  }
+}
+
+function drawGifPatch(context, patchCanvas, patchContext, frame) {
+  if (patchCanvas.width !== frame.dims.width) patchCanvas.width = frame.dims.width;
+  if (patchCanvas.height !== frame.dims.height) patchCanvas.height = frame.dims.height;
+
+  patchContext.clearRect(0, 0, frame.dims.width, frame.dims.height);
+  patchContext.putImageData(new ImageData(frame.patch, frame.dims.width, frame.dims.height), 0, 0);
+  context.drawImage(patchCanvas, frame.dims.left, frame.dims.top);
+}
+
 function analyzeImage(imageData) {
   const { data, width, height } = imageData;
   const total = width * height;
@@ -609,8 +901,12 @@ function getOriginalExtension(name) {
 
   const value = match[1].toLowerCase();
   if (value === "jpeg") return "jpg";
-  if (["jpg", "png", "webp", "avif"].includes(value)) return value;
+  if (["jpg", "png", "webp", "avif", "gif"].includes(value)) return value;
   return "";
+}
+
+function isGifFile(file) {
+  return file.type === "image/gif" || /\.gif$/i.test(file.name || "");
 }
 
 function closeBitmap(bitmap) {

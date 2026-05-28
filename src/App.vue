@@ -30,7 +30,16 @@ const tools = [
     group: "图片工具",
     description: "纯前端图片极致压缩，自动找最小体积，下载保持原图片后缀。",
     seoDescription: "TGMENG TOOLS 图片压缩工具，纯前端本地完成图片极致压缩，自动寻找最小体积，并保持原图片后缀下载。",
-    keywords: "图片压缩,在线图片压缩,极致压缩,WebP,AVIF,JPEG,PNG,纯前端图片压缩,TGMENG TOOLS",
+    keywords: "图片压缩,在线图片压缩,极致压缩,GIF压缩,WebP,AVIF,JPEG,PNG,纯前端图片压缩,TGMENG TOOLS",
+  },
+  {
+    key: "image-watermark",
+    title: "图片水印",
+    icon: "image",
+    group: "图片工具",
+    description: "给图片添加文字水印，支持实时预览和参数调节。",
+    seoDescription: "TGMENG TOOLS 图片水印工具，纯前端给图片添加文字水印，支持颜色、透明度、角度、间隔和字号实时预览。",
+    keywords: "图片水印,在线图片水印,文字水印,水印预览,纯前端图片水印,TGMENG TOOLS",
   },
   {
     key: "json",
@@ -54,7 +63,22 @@ const tools = [
   },
 ];
 
-const groupOrder = ["AI工具", "图片工具", "开发工具"];
+const sidebarExternalLinks = [
+  {
+    key: "ecosystem",
+    title: "生态站",
+    group: "关于作者",
+    url: "https://nav.tgmeng.com",
+  },
+  {
+    key: "wechat",
+    title: "微信群",
+    group: "关于作者",
+    url: "https://wechat.tgmeng.com",
+  },
+];
+
+const groupOrder = ["AI工具", "图片工具", "开发工具", "关于作者"];
 const defaultTool = "api-purity";
 const siteOrigin = "https://tools.tgmeng.com";
 const siteName = "TGMENG TOOLS";
@@ -162,6 +186,7 @@ const feedback = reactive({
   apiPurity: { message: "", type: "" },
   codexPets: { message: "", type: "" },
   imageCompress: { message: "", type: "" },
+  imageWatermark: { message: "", type: "" },
 });
 const meta = reactive({
   base64Input: 0,
@@ -179,6 +204,8 @@ const workspace = ref(null);
 const jsonIndent = ref(2);
 const selectedPetPreview = ref(null);
 const imageFileInput = ref(null);
+const watermarkFileInput = ref(null);
+const watermarkCanvas = ref(null);
 const imageCompressOptions = reactive({
   mode: "ultra",
   outputMode: "smallest",
@@ -192,6 +219,18 @@ const imageCompressState = reactive({
   progress: 0,
   total: 0,
   currentName: "",
+});
+const watermarkOptions = reactive({
+  text: "糖果梦",
+  color: "#ffffff",
+  opacity: 38,
+  angle: 50,
+  gap: 120,
+  fontSize: 32,
+});
+const watermarkState = reactive({
+  items: [],
+  activeId: "",
 });
 const apiPurityForm = reactive({
   baseUrl: "",
@@ -284,6 +323,16 @@ const imageCompressCanRun = computed(() => {
 });
 const imageCompressCanDownloadAll = computed(() => {
   return !busy.imageCompress && !busy.imageDownloadAll && imageCompressState.items.some((item) => item.status === "done");
+});
+const activeWatermarkItem = computed(() => {
+  return watermarkState.items.find((item) => item.id === watermarkState.activeId) || watermarkState.items[0] || null;
+});
+const watermarkReadyItems = computed(() => {
+  return watermarkState.items.filter((item) => item.status === "ready");
+});
+const activeWatermarkIndex = computed(() => {
+  if (!watermarkReadyItems.value.length) return -1;
+  return watermarkReadyItems.value.findIndex((item) => item.id === activeWatermarkItem.value?.id);
 });
 const apiCliDemos = computed(() => {
   const endpoints = apiCliEndpoints.value;
@@ -488,13 +537,14 @@ const allApiCliDemoCommand = computed(() => {
 
 const filteredGroups = computed(() => {
   const term = search.value.trim().toLowerCase();
-  const matchedTools = term
-    ? tools.filter((tool) => `${tool.title} ${tool.key} ${tool.group}`.toLowerCase().includes(term))
-    : tools;
+  const navItems = [...tools, ...sidebarExternalLinks];
+  const matchedItems = term
+    ? navItems.filter((item) => `${item.title} ${item.key} ${item.group}`.toLowerCase().includes(term))
+    : navItems;
 
   const groups = groupOrder.map((group) => ({
     group,
-    tools: matchedTools.filter((tool) => tool.group === group),
+    tools: matchedItems.filter((item) => item.group === group),
   }));
 
   return term ? groups.filter((item) => item.tools.length > 0) : groups;
@@ -516,6 +566,7 @@ onBeforeUnmount(() => {
   document.removeEventListener("keydown", handleKeydown);
   stopApiPurityCheck();
   imageCompressState.results.forEach((item) => revokeObjectUrls(item));
+  clearWatermarkSource(false);
 
   if (worker) {
     worker.terminate();
@@ -1259,6 +1310,14 @@ function handleImageDrop(event) {
   setImageFiles(event.dataTransfer?.files);
 }
 
+function handleWatermarkFileChange(event) {
+  setWatermarkFiles(event.target.files);
+}
+
+function handleWatermarkDrop(event) {
+  setWatermarkFiles(event.dataTransfer?.files);
+}
+
 function setImageFiles(fileList) {
   const files = Array.from(fileList || []).filter((file) => file.type?.startsWith("image/"));
 
@@ -1280,6 +1339,249 @@ function setImageFiles(fileList) {
 
 function chooseImageFiles() {
   imageFileInput.value?.click();
+}
+
+function chooseWatermarkFile() {
+  watermarkFileInput.value?.click();
+}
+
+async function setWatermarkFiles(fileList) {
+  const files = Array.from(fileList || []).filter((file) => file.type?.startsWith("image/"));
+  if (!files.length) {
+    setFeedback("imageWatermark", "请选择 JPG、PNG、WebP、AVIF 或 GIF 图片。", "warning");
+    return;
+  }
+
+  clearWatermarkSource(false);
+  watermarkState.items = files.map((file) => createWatermarkPendingItem(file));
+  watermarkState.activeId = watermarkState.items[0]?.id || "";
+  setFeedback("imageWatermark", `正在读取 ${files.length} 张图片...`);
+
+  for (let index = 0; index < watermarkState.items.length; index += 1) {
+    const item = watermarkState.items[index];
+    try {
+      const image = await loadImageFromUrl(item.sourceUrl);
+      updateWatermarkItem(index, {
+        width: image.naturalWidth || image.width,
+        height: image.naturalHeight || image.height,
+        status: "ready",
+        statusText: "可下载",
+      });
+    } catch (error) {
+      updateWatermarkItem(index, {
+        status: "error",
+        statusText: "读取失败",
+      });
+    }
+  }
+
+  const readyCount = watermarkReadyItems.value.length;
+  drawWatermarkPreview();
+  setFeedback("imageWatermark", readyCount ? `已加载 ${readyCount} 张图片，可批量加水印。` : "图片读取失败，请换一批图片。", readyCount ? "success" : "error");
+}
+
+function drawWatermarkPreview() {
+  const item = activeWatermarkItem.value;
+  if (!item?.sourceUrl || item.status !== "ready" || !watermarkCanvas.value) return;
+
+  const canvas = watermarkCanvas.value;
+  const image = new Image();
+  image.onload = () => {
+    const width = image.naturalWidth || image.width;
+    const height = image.naturalHeight || image.height;
+    const previewBox = canvas.parentElement?.getBoundingClientRect();
+    const maxPreviewWidth = Math.max(1, (previewBox?.width || 960) - 36);
+    const maxPreviewHeight = Math.max(1, (previewBox?.height || 360) - 36);
+    const scale = Math.min(1, maxPreviewWidth / width, maxPreviewHeight / height);
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    const context = canvas.getContext("2d");
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    drawWatermarkLayer(context, canvas.width, canvas.height, scale);
+  };
+  image.src = item.sourceUrl;
+}
+
+async function downloadWatermarkedImage(item = activeWatermarkItem.value) {
+  if (!item?.sourceUrl || item.status !== "ready") {
+    setFeedback("imageWatermark", "请先选择图片。", "warning");
+    return;
+  }
+
+  try {
+    const blob = await createWatermarkedBlob(item);
+    const url = URL.createObjectURL(blob);
+    triggerDownload(url, getWatermarkOutputName(item.name));
+    window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+    setFeedback("imageWatermark", `${item.name} 水印图已开始下载。`, "success");
+  } catch (error) {
+    setFeedback("imageWatermark", "生成水印图片失败。", "error");
+  }
+}
+
+async function downloadAllWatermarkedImages() {
+  const items = watermarkReadyItems.value;
+  if (!items.length) {
+    setFeedback("imageWatermark", "没有可下载的水印图片。", "warning");
+    return;
+  }
+
+  if (items.length === 1) {
+    await downloadWatermarkedImage(items[0]);
+    return;
+  }
+
+  setFeedback("imageWatermark", "正在打包水印图片...");
+
+  try {
+    const files = {};
+    const usedNames = new Set();
+
+    for (const item of items) {
+      const blob = await createWatermarkedBlob(item);
+      const arrayBuffer = await blob.arrayBuffer();
+      files[getUniqueZipName(getWatermarkOutputName(item.name), usedNames)] = new Uint8Array(arrayBuffer);
+    }
+
+    const zipData = zipSync(files, { level: 0 });
+    const zipBlob = new Blob([zipData], { type: "application/zip" });
+    const zipUrl = URL.createObjectURL(zipBlob);
+    triggerDownload(zipUrl, `tgmeng-watermark-${formatDateForFile(new Date())}.zip`);
+    window.setTimeout(() => URL.revokeObjectURL(zipUrl), 30000);
+    setFeedback("imageWatermark", `已打包 ${items.length} 张水印图片并开始下载。`, "success");
+  } catch (error) {
+    setFeedback("imageWatermark", "打包水印图片失败。", "error");
+  }
+}
+
+async function createWatermarkedBlob(item) {
+  const image = await loadImageFromUrl(item.sourceUrl);
+  const canvas = document.createElement("canvas");
+  canvas.width = image.naturalWidth || image.width;
+  canvas.height = image.naturalHeight || image.height;
+  const context = canvas.getContext("2d");
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  drawWatermarkLayer(context, canvas.width, canvas.height, 1);
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("Failed to create blob"));
+    }, getWatermarkMimeType(item.file));
+  });
+}
+
+function createWatermarkPendingItem(file) {
+  return {
+    id: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`,
+    file,
+    sourceUrl: URL.createObjectURL(file),
+    name: file.name,
+    bytes: file.size,
+    width: 0,
+    height: 0,
+    status: "loading",
+    statusText: "读取中",
+  };
+}
+
+function updateWatermarkItem(index, patch) {
+  const current = watermarkState.items[index];
+  if (!current) return;
+  watermarkState.items.splice(index, 1, { ...current, ...patch });
+}
+
+function selectWatermarkItem(item) {
+  if (item.status !== "ready") return;
+  watermarkState.activeId = item.id;
+  drawWatermarkPreview();
+}
+
+function switchWatermarkPreview(direction) {
+  const items = watermarkReadyItems.value;
+  if (items.length < 2) return;
+
+  const currentIndex = activeWatermarkIndex.value >= 0 ? activeWatermarkIndex.value : 0;
+  const nextIndex = (currentIndex + direction + items.length) % items.length;
+  watermarkState.activeId = items[nextIndex].id;
+  drawWatermarkPreview();
+}
+
+function drawWatermarkLayer(context, width, height, scale) {
+  const text = watermarkOptions.text.trim();
+  if (!text) return;
+
+  const fontSize = Math.max(8, watermarkOptions.fontSize * scale);
+  const gap = Math.max(24, watermarkOptions.gap * scale);
+  const diagonal = Math.hypot(width, height);
+  const alpha = Math.min(1, Math.max(0, watermarkOptions.opacity / 100));
+
+  context.save();
+  context.translate(width / 2, height / 2);
+  context.rotate((watermarkOptions.angle * Math.PI) / 180);
+  context.globalAlpha = alpha;
+  context.fillStyle = watermarkOptions.color;
+  context.font = `700 ${fontSize}px ${getCanvasFontFamily()}`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+
+  for (let y = -diagonal; y <= diagonal; y += gap) {
+    for (let x = -diagonal; x <= diagonal; x += gap * 1.45) {
+      context.fillText(text, x, y);
+    }
+  }
+
+  context.restore();
+}
+
+function loadImageFromUrl(url) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = url;
+  });
+}
+
+function getCanvasFontFamily() {
+  return `"Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif`;
+}
+
+function getWatermarkMimeType(file) {
+  const type = file?.type || "";
+  return ["image/jpeg", "image/png", "image/webp"].includes(type) ? type : "image/png";
+}
+
+function getWatermarkOutputName(name) {
+  const rawName = String(name || "image").replace(/[\\/:*?"<>|]/g, "_");
+  const baseName = rawName.replace(/\.[^.]+$/, "") || "image";
+  const extension = rawName.match(/(\.[^.]+)$/)?.[1]?.toLowerCase() || ".png";
+  const outputExtension = [".jpg", ".jpeg", ".png", ".webp"].includes(extension) ? extension : ".png";
+  return `${baseName}-watermark${outputExtension}`;
+}
+
+function clearWatermarkSource(showFeedback = true) {
+  watermarkState.items.forEach((item) => {
+    if (item.sourceUrl) URL.revokeObjectURL(item.sourceUrl);
+  });
+  watermarkState.items = [];
+  watermarkState.activeId = "";
+
+  if (watermarkCanvas.value) {
+    const context = watermarkCanvas.value.getContext("2d");
+    context.clearRect(0, 0, watermarkCanvas.value.width, watermarkCanvas.value.height);
+    watermarkCanvas.value.width = 1;
+    watermarkCanvas.value.height = 1;
+  }
+
+  if (watermarkFileInput.value) {
+    watermarkFileInput.value.value = "";
+  }
+
+  if (showFeedback) {
+    setFeedback("imageWatermark", "已清空。", "success");
+  }
 }
 
 async function startImageCompress() {
@@ -1381,7 +1683,7 @@ function normalizeImageCompressResult(file, result, originalUrl, outputUrl) {
     savedBytes,
     savedPercent,
     status: "done",
-    statusText: savedPercent > 0 ? `已压缩 ${savedPercent}%` : "已处理",
+    statusText: `已压缩 ${savedPercent}%`,
     scoreLabel: Number.isFinite(result.score) ? result.score.toFixed(2) : "100.00",
     qualityLabel: Number.isFinite(result.quality) ? Math.round(result.quality * 100) : "--",
   };
@@ -1741,19 +2043,32 @@ async function copyText(textarea, tool) {
             <svg class="icon" aria-hidden="true"><use href="#icon-chevron-right"></use></svg>
           </button>
           <div class="nav-section-tools" :class="{ 'is-collapsed': isGroupClosed(group.group) }">
-            <button
-              v-for="tool in group.tools"
-              :key="tool.key"
-              class="tool-link"
-              :class="{ 'is-active': activeTool === tool.key }"
-              type="button"
-              :title="tool.navTitle || tool.title"
-              :tabindex="isGroupClosed(group.group) ? -1 : 0"
-              :aria-current="activeTool === tool.key ? 'page' : undefined"
-              @click="activateTool(tool.key)"
-            >
-              <span>{{ tool.navTitle || tool.title }}</span>
-            </button>
+            <template v-for="tool in group.tools" :key="tool.key">
+              <a
+                v-if="tool.url"
+                class="tool-link"
+                :href="tool.url"
+                target="_blank"
+                rel="noopener noreferrer"
+                :title="tool.navTitle || tool.title"
+                :tabindex="isGroupClosed(group.group) ? -1 : 0"
+                @click="sidebarOpen = false"
+              >
+                <span>{{ tool.navTitle || tool.title }}</span>
+              </a>
+              <button
+                v-else
+                class="tool-link"
+                :class="{ 'is-active': activeTool === tool.key }"
+                type="button"
+                :title="tool.navTitle || tool.title"
+                :tabindex="isGroupClosed(group.group) ? -1 : 0"
+                :aria-current="activeTool === tool.key ? 'page' : undefined"
+                @click="activateTool(tool.key)"
+              >
+                <span>{{ tool.navTitle || tool.title }}</span>
+              </button>
+            </template>
           </div>
         </template>
         <p v-if="filteredGroups.length === 0" class="nav-empty">没有匹配的工具</p>
@@ -2124,13 +2439,13 @@ async function copyText(textarea, tool) {
           >
             <svg class="icon" aria-hidden="true"><use href="#icon-upload"></use></svg>
             <strong>点击选择 或 将图片拖拽到此处</strong>
-            <span>支持 JPG、PNG、WebP、AVIF 图片格式</span>
+            <span>支持 JPG、PNG、WebP、AVIF、GIF 图片格式</span>
           </button>
           <input
             ref="imageFileInput"
             class="hidden-file-input"
             type="file"
-            accept="image/jpeg,image/png,image/webp,image/avif"
+            accept="image/jpeg,image/png,image/webp,image/avif,image/gif"
             multiple
             :disabled="busy.imageCompress"
             @change="handleImageFileChange"
@@ -2204,6 +2519,183 @@ async function copyText(textarea, tool) {
 
         <p class="feedback" :class="feedback.imageCompress.type && `is-${feedback.imageCompress.type}`" role="status" aria-live="polite">
           {{ feedback.imageCompress.message }}
+        </p>
+      </section>
+
+      <section v-show="activeTool === 'image-watermark'" class="tool-view image-watermark-view" aria-labelledby="imageWatermarkTitle">
+        <h2 id="imageWatermarkTitle" class="sr-only">图片水印</h2>
+        <section class="image-compress-panel image-watermark-panel" aria-label="图片水印">
+          <button
+            class="image-upload-zone"
+            type="button"
+            @click="chooseWatermarkFile"
+            @dragover.prevent
+            @drop.prevent="handleWatermarkDrop"
+          >
+            <svg class="icon" aria-hidden="true"><use href="#icon-upload"></use></svg>
+            <strong>点击选择 或 将图片拖拽到此处</strong>
+            <span>支持 JPG、PNG、WebP、AVIF、GIF 图片格式，水印实时预览</span>
+          </button>
+          <input
+            ref="watermarkFileInput"
+            class="hidden-file-input"
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/avif,image/gif"
+            multiple
+            @change="handleWatermarkFileChange"
+          />
+
+          <div class="watermark-workspace">
+            <section class="work-panel watermark-controls" aria-labelledby="watermarkControlTitle">
+              <div class="panel-head">
+                <label id="watermarkControlTitle">水印设置</label>
+                <span>{{ activeWatermarkItem ? `${activeWatermarkItem.width || "--"}x${activeWatermarkItem.height || "--"}` : "等待图片" }}</span>
+              </div>
+
+              <div class="watermark-control-body">
+                <label class="watermark-field">
+                  <span>水印文字</span>
+                  <input v-model="watermarkOptions.text" type="text" maxlength="40" placeholder="输入水印文字" @input="drawWatermarkPreview" />
+                </label>
+
+                <div class="watermark-field">
+                  <span>文字颜色</span>
+                  <label class="color-picker-row">
+                    <input v-model="watermarkOptions.color" type="color" aria-label="水印文字颜色" @input="drawWatermarkPreview" />
+                    <span>{{ watermarkOptions.color }}</span>
+                  </label>
+                </div>
+
+                <label class="watermark-range">
+                  <span>透明度 <strong>{{ watermarkOptions.opacity }}%</strong></span>
+                  <input v-model.number="watermarkOptions.opacity" type="range" min="5" max="100" step="1" @input="drawWatermarkPreview" />
+                </label>
+
+                <label class="watermark-range">
+                  <span>角度 <strong>{{ watermarkOptions.angle }}°</strong></span>
+                  <input v-model.number="watermarkOptions.angle" type="range" min="-100" max="100" step="1" @input="drawWatermarkPreview" />
+                </label>
+
+                <label class="watermark-range">
+                  <span>间隔 <strong>{{ watermarkOptions.gap }}px</strong></span>
+                  <input v-model.number="watermarkOptions.gap" type="range" min="48" max="1600" step="4" @input="drawWatermarkPreview" />
+                </label>
+
+                <label class="watermark-range">
+                  <span>字号 <strong>{{ watermarkOptions.fontSize }}px</strong></span>
+                  <input v-model.number="watermarkOptions.fontSize" type="range" min="12" max="1000" step="1" @input="drawWatermarkPreview" />
+                </label>
+              </div>
+            </section>
+
+            <section class="work-panel watermark-preview-panel" aria-labelledby="watermarkPreviewTitle">
+              <div class="panel-head">
+                <label id="watermarkPreviewTitle">实时预览</label>
+                <span>{{ activeWatermarkItem?.name || "未选择" }}</span>
+              </div>
+
+              <div class="watermark-preview-stage" :class="{ 'is-empty': activeWatermarkItem?.status !== 'ready' }">
+                <canvas ref="watermarkCanvas" aria-label="图片水印预览"></canvas>
+                <button
+                  v-if="watermarkReadyItems.length > 1"
+                  class="watermark-preview-nav is-prev"
+                  type="button"
+                  aria-label="预览上一张图片"
+                  @click="switchWatermarkPreview(-1)"
+                >
+                  <svg class="icon" aria-hidden="true"><use href="#icon-chevron-right"></use></svg>
+                </button>
+                <button
+                  v-if="watermarkReadyItems.length > 1"
+                  class="watermark-preview-nav is-next"
+                  type="button"
+                  aria-label="预览下一张图片"
+                  @click="switchWatermarkPreview(1)"
+                >
+                  <svg class="icon" aria-hidden="true"><use href="#icon-chevron-right"></use></svg>
+                </button>
+                <span v-if="watermarkReadyItems.length > 1" class="watermark-preview-counter">
+                  {{ activeWatermarkIndex + 1 }} / {{ watermarkReadyItems.length }}
+                </span>
+                <div v-if="activeWatermarkItem?.status !== 'ready'" class="watermark-empty-state">
+                  <svg class="icon" aria-hidden="true"><use href="#icon-image"></use></svg>
+                  <strong>选择图片后预览水印效果</strong>
+                  <span>所有处理都在浏览器本地完成</span>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <div class="image-list-panel watermark-file-panel">
+            <div class="image-table-wrap" aria-label="水印图片信息">
+              <table class="image-compress-table watermark-file-table">
+                <thead>
+                  <tr>
+                    <th>文件名</th>
+                    <th>尺寸</th>
+                    <th>大小</th>
+                    <th>状态</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="!watermarkState.items.length">
+                    <td colspan="5" class="image-table-empty">请选择图片</td>
+                  </tr>
+                  <template v-else>
+                    <tr
+                      v-for="item in watermarkState.items"
+                      :key="item.id"
+                      class="watermark-file-row"
+                      :class="{ 'is-active': item.id === activeWatermarkItem?.id }"
+                      @click="selectWatermarkItem(item)"
+                    >
+                      <td>
+                        <span class="image-file-name" :title="item.name">{{ item.name }}</span>
+                      </td>
+                      <td>{{ item.width ? `${item.width} x ${item.height}` : "--" }}</td>
+                      <td>{{ formatBytes(item.bytes) }}</td>
+                      <td>
+                        <span class="image-status-pill" :class="item.status === 'ready' ? 'is-done' : item.status === 'error' ? 'is-error' : 'is-compressing'">
+                          <span v-if="item.status === 'loading'" class="loading-spinner" aria-hidden="true"></span>
+                          {{ item.statusText }}
+                        </span>
+                      </td>
+                      <td>
+                        <button
+                          class="image-row-download"
+                          type="button"
+                          :disabled="item.status !== 'ready'"
+                          @click.stop="downloadWatermarkedImage(item)"
+                        >
+                          下载
+                        </button>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="image-list-actions">
+              <div class="primary-actions">
+                <button class="secondary-button" type="button" :disabled="!watermarkState.items.length" @click="clearWatermarkSource">
+                  <svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>
+                  清空图片
+                </button>
+              </div>
+              <div class="image-main-actions">
+                <button class="primary-button image-download-all" type="button" :disabled="!watermarkReadyItems.length" @click="downloadAllWatermarkedImages">
+                  <svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg>
+                  {{ watermarkReadyItems.length > 1 ? "下载全部" : "下载水印图" }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <p class="feedback" :class="feedback.imageWatermark.type && `is-${feedback.imageWatermark.type}`" role="status" aria-live="polite">
+          {{ feedback.imageWatermark.message }}
         </p>
       </section>
 
