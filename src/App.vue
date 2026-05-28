@@ -92,8 +92,8 @@ const defaultTool = "api-purity";
 const siteOrigin = "https://tools.tgmeng.com";
 const siteName = "TGMENG TOOLS";
 const siteTitle = "TGMENG TOOLS - 糖果梦工具箱";
-const siteDescription = "TGMENG TOOLS 是一个个人自用的小工具站，提供中转站纯度检测、图片极致压缩、JSON 格式化和 Base64 加解密等纯前端工具。";
-const siteKeywords = "TGMENG TOOLS,糖果梦工具箱,中转站纯度检测,图片压缩,JSON 格式化,Base64 加解密,纯前端工具";
+const siteDescription = "TGMENG TOOLS 是糖果梦工具箱，提供中转站纯度检测、图片压缩、图片水印、音质修改、JSON 格式化和 Base64 加解密等纯前端工具。";
+const siteKeywords = "TGMENG TOOLS,糖果梦工具箱,中转站纯度检测,图片压缩,图片水印,音质修改,JSON 格式化,Base64 加解密,纯前端工具,在线工具";
 const siteImage = `${siteOrigin}/assets/logo.png`;
 
 const petPackages = [
@@ -666,14 +666,19 @@ function updateSeo(toolKey) {
   document.title = title;
   setMeta("name", "description", description);
   setMeta("name", "keywords", keywords);
+  setMeta("name", "robots", "index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1");
   setMeta("property", "og:title", title);
   setMeta("property", "og:description", description);
   setMeta("property", "og:url", url);
   setMeta("property", "og:image", siteImage);
+  setMeta("property", "og:image:alt", `${tool.title} - ${siteName}`);
+  setMeta("property", "og:type", "website");
   setMeta("name", "twitter:title", title);
   setMeta("name", "twitter:description", description);
   setMeta("name", "twitter:image", siteImage);
+  setMeta("name", "twitter:image:alt", `${tool.title} - ${siteName}`);
   setCanonical(url);
+  setStructuredData(tool, title, description, url);
 }
 
 function setMeta(attribute, key, content) {
@@ -696,6 +701,86 @@ function setCanonical(url) {
   }
 
   link.setAttribute("href", url);
+}
+
+function setStructuredData(tool, title, description, url) {
+  const graph = {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "@id": `${siteOrigin}/#website`,
+        "name": siteName,
+        "alternateName": "糖果梦工具箱",
+        "url": `${siteOrigin}/api-purity`,
+        "inLanguage": "zh-CN",
+        "publisher": { "@id": `${siteOrigin}/#organization` },
+      },
+      {
+        "@type": "Organization",
+        "@id": `${siteOrigin}/#organization`,
+        "name": "TGMENG",
+        "url": "https://nav.tgmeng.com",
+        "logo": {
+          "@type": "ImageObject",
+          "url": siteImage,
+          "width": 180,
+          "height": 180,
+        },
+      },
+      {
+        "@type": "WebApplication",
+        "@id": `${url}#app`,
+        "name": title,
+        "url": url,
+        "description": description,
+        "applicationCategory": "UtilitiesApplication",
+        "operatingSystem": "Web",
+        "inLanguage": "zh-CN",
+        "isAccessibleForFree": true,
+        "image": siteImage,
+        "publisher": { "@id": `${siteOrigin}/#organization` },
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "CNY",
+        },
+      },
+      {
+        "@type": "BreadcrumbList",
+        "@id": `${url}#breadcrumb`,
+        "itemListElement": [
+          {
+            "@type": "ListItem",
+            "position": 1,
+            "name": siteName,
+            "item": `${siteOrigin}/api-purity`,
+          },
+          {
+            "@type": "ListItem",
+            "position": 2,
+            "name": tool.group,
+          },
+          {
+            "@type": "ListItem",
+            "position": 3,
+            "name": tool.title,
+            "item": url,
+          },
+        ],
+      },
+    ],
+  };
+
+  let script = document.head.querySelector("#site-schema");
+  if (!script) {
+    script = document.createElement("script");
+    script.id = "site-schema";
+    script.type = "application/ld+json";
+    document.head.append(script);
+  }
+
+  script.textContent = JSON.stringify(graph);
 }
 
 function loadCollapsedGroups() {
