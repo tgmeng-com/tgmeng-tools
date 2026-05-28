@@ -208,6 +208,14 @@ h2 {
     margin-bottom: 0;
   }
 
+  .sidebar.is-collapsed .brand-home {
+    gap: 0;
+    width: 0;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+  }
+
   .sidebar.is-collapsed .brand-mark {
     width: 0;
     height: 0;
@@ -309,6 +317,28 @@ h2 {
   gap: 10px;
   min-height: 42px;
   margin-bottom: 12px;
+}
+
+.brand-home {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 0;
+  text-align: left;
+}
+
+.brand-home:hover {
+  color: var(--text);
+}
+
+.brand-home:focus-visible {
+  outline: 0;
+  border-radius: var(--radius);
+  box-shadow: var(--focus);
 }
 
 .brand-text {
@@ -642,6 +672,30 @@ h2 {
 
 .tool-view {
   display: block;
+}
+
+.home-view {
+  display: grid;
+  min-height: calc(100dvh - 138px);
+  place-items: center;
+  text-align: center;
+}
+
+.home-view h2 {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7em;
+  max-width: 14em;
+  color: var(--text);
+  font-size: clamp(32px, 5vw, 64px);
+  line-height: 1.32;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+}
+
+.home-view h2 span {
+  display: inline;
 }
 
 .frontend-notice {
@@ -2651,6 +2705,19 @@ textarea::placeholder {
   .workspace-note {
     font-size: 12px;
     line-height: 1.55;
+  }
+
+  .home-view h2 {
+    flex-direction: column;
+    gap: 0.18em;
+    max-width: 8em;
+    font-size: 38px;
+    line-height: 1.28;
+    letter-spacing: 0.03em;
+  }
+
+  .home-view h2 span {
+    display: block;
   }
 
   .frontend-notice {

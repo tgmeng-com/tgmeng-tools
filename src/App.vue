@@ -89,12 +89,21 @@ const sidebarExternalLinks = [
 
 const groupOrder = ["AI工具", "图片工具", "音乐工具", "开发工具", "关于作者"];
 const defaultTool = "api-purity";
+const homePath = "/";
 const siteOrigin = "https://tools.tgmeng.com";
 const siteName = "TGMENG TOOLS";
 const siteTitle = "TGMENG TOOLS - 糖果梦工具箱";
 const siteDescription = "TGMENG TOOLS 是糖果梦工具箱，提供中转站纯度检测、图片压缩、图片水印、音质修改、JSON 格式化和 Base64 加解密等纯前端工具。";
 const siteKeywords = "TGMENG TOOLS,糖果梦工具箱,中转站纯度检测,图片压缩,图片水印,音质修改,JSON 格式化,Base64 加解密,纯前端工具,在线工具";
 const siteImage = `${siteOrigin}/assets/logo.png`;
+const homePage = {
+  key: "home",
+  title: "首页",
+  group: siteName,
+  description: siteDescription,
+  seoDescription: siteDescription,
+  keywords: siteKeywords,
+};
 
 const petPackages = [
   {
@@ -183,7 +192,7 @@ const storageKeys = {
   collapsedGroups: "tgmeng-tools.collapsed-groups",
 };
 
-const activeTool = ref(defaultTool);
+const activeTool = ref("home");
 const search = ref("");
 const sidebarOpen = ref(false);
 const sidebarCollapsed = ref(localStorage.getItem(storageKeys.sidebarCollapsed) === "true");
@@ -292,6 +301,7 @@ let apiPurityController = null;
 const pendingJobs = new Map();
 
 const activeToolConfig = computed(() => {
+  if (activeTool.value === "home") return homePage;
   return tools.find((tool) => tool.key === activeTool.value) || tools[0];
 });
 
@@ -615,7 +625,10 @@ onBeforeUnmount(() => {
 });
 
 function getInitialTool() {
-  const fromPath = window.location.pathname.split("/").filter(Boolean).pop();
+  const segments = window.location.pathname.split("/").filter(Boolean);
+  if (!segments.length) return "home";
+
+  const fromPath = segments.pop();
   const fromStorage = localStorage.getItem(storageKeys.activeTool);
   if (tools.some((tool) => tool.key === fromPath)) return fromPath;
   if (tools.some((tool) => tool.key === fromStorage)) return fromStorage;
@@ -623,10 +636,13 @@ function getInitialTool() {
 }
 
 function activateTool(tool, updatePath = true) {
-  if (!tools.some((item) => item.key === tool)) return;
+  const isHome = tool === "home";
+  if (!isHome && !tools.some((item) => item.key === tool)) return;
 
   activeTool.value = tool;
-  localStorage.setItem(storageKeys.activeTool, tool);
+  if (!isHome) {
+    localStorage.setItem(storageKeys.activeTool, tool);
+  }
 
   if (updatePath) {
     history.pushState(null, "", getToolPath(tool));
@@ -637,12 +653,18 @@ function activateTool(tool, updatePath = true) {
 }
 
 function handleRouteChange() {
-  const tool = window.location.pathname.split("/").filter(Boolean).pop();
+  const segments = window.location.pathname.split("/").filter(Boolean);
+  if (!segments.length) {
+    activateTool("home", false);
+    return;
+  }
+
+  const tool = segments.pop();
   if (tools.some((item) => item.key === tool)) {
     activateTool(tool, false);
   } else {
-    activateTool(defaultTool, false);
-    syncPath(defaultTool);
+    activateTool("home", false);
+    syncPath("home");
   }
 }
 
@@ -653,12 +675,13 @@ function syncPath(tool) {
 }
 
 function getToolPath(tool) {
+  if (tool === "home") return homePath;
   return `/${tool}`;
 }
 
 function updateSeo(toolKey) {
-  const tool = tools.find((item) => item.key === toolKey) || tools[0];
-  const title = tool.key === defaultTool ? siteTitle : `${tool.title} - ${siteName}`;
+  const tool = toolKey === "home" ? homePage : tools.find((item) => item.key === toolKey) || tools[0];
+  const title = tool.key === "home" ? siteTitle : `${tool.title} - ${siteName}`;
   const description = tool.seoDescription || siteDescription;
   const keywords = tool.keywords ? `${tool.keywords},${siteKeywords}` : siteKeywords;
   const url = `${siteOrigin}${getToolPath(tool.key)}`;
@@ -712,7 +735,7 @@ function setStructuredData(tool, title, description, url) {
         "@id": `${siteOrigin}/#website`,
         "name": siteName,
         "alternateName": "糖果梦工具箱",
-        "url": `${siteOrigin}/api-purity`,
+        "url": siteOrigin,
         "inLanguage": "zh-CN",
         "publisher": { "@id": `${siteOrigin}/#organization` },
       },
@@ -754,19 +777,23 @@ function setStructuredData(tool, title, description, url) {
             "@type": "ListItem",
             "position": 1,
             "name": siteName,
-            "item": `${siteOrigin}/api-purity`,
+            "item": siteOrigin,
           },
-          {
-            "@type": "ListItem",
-            "position": 2,
-            "name": tool.group,
-          },
-          {
-            "@type": "ListItem",
-            "position": 3,
-            "name": tool.title,
-            "item": url,
-          },
+          ...(tool.key === "home"
+            ? []
+            : [
+                {
+                  "@type": "ListItem",
+                  "position": 2,
+                  "name": tool.group,
+                },
+                {
+                  "@type": "ListItem",
+                  "position": 3,
+                  "name": tool.title,
+                  "item": url,
+                },
+              ]),
         ],
       },
     ],
@@ -2337,12 +2364,14 @@ async function copyText(textarea, tool) {
   <div class="app-shell" :class="{ 'is-sidebar-collapsed': sidebarCollapsed }">
     <aside class="sidebar" :class="{ 'is-open': sidebarOpen, 'is-collapsed': sidebarCollapsed }" aria-label="工具导航">
       <div class="brand">
+        <button class="brand-home" type="button" aria-label="回到首页" title="首页" @click="activateTool('home')">
         <span class="brand-mark" aria-hidden="true">
           <img class="brand-logo" src="/assets/logo.png" alt="" />
         </span>
         <span class="brand-text">
           <strong>TGMENG TOOLS</strong>
         </span>
+        </button>
         <button
           class="sidebar-toggle"
           type="button"
@@ -2429,7 +2458,7 @@ async function copyText(textarea, tool) {
           <svg class="icon" aria-hidden="true"><use href="#icon-menu"></use></svg>
         </button>
         <div class="mobile-top-spacer" aria-hidden="true"></div>
-        <div class="tool-heading">
+        <div v-if="activeTool !== 'home'" class="tool-heading">
           <h1 class="sr-only">{{ activeTitle }}</h1>
           <p class="workspace-note">
             <span>{{ activeGroup }}</span>
@@ -2452,6 +2481,13 @@ async function copyText(textarea, tool) {
           </button>
         </div>
       </header>
+
+      <section v-show="activeTool === 'home'" class="tool-view home-view" aria-labelledby="homeTitle">
+        <h2 id="homeTitle">
+          <span>科技不该冰冷</span>
+          <span>人性不该傲慢</span>
+        </h2>
+      </section>
 
       <section v-show="activeTool === 'api-purity'" class="tool-view api-purity-view" aria-labelledby="apiPurityTitle">
         <h2 id="apiPurityTitle" class="sr-only">中转站纯度检测</h2>
