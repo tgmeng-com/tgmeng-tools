@@ -2489,7 +2489,10 @@ textarea::placeholder {
   .secondary-button,
   .soft-button,
   .icon-text-button {
-    flex: 1 1 140px;
+    flex: 0 0 auto;
+    width: 100%;
+    min-height: 44px;
+    padding: 0 12px;
   }
 
   .compact-actions {
@@ -2499,6 +2502,13 @@ textarea::placeholder {
 
   .compact-button {
     flex: 0 0 auto;
+  }
+
+  .pet-download-button,
+  .image-start-button,
+  .image-download-all {
+    flex: 0 0 auto;
+    min-height: 44px;
   }
 
   .segmented-control {
