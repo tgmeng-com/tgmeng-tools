@@ -96,12 +96,18 @@ button {
 }
 
 button:disabled {
-  cursor: wait;
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+select:disabled {
+  cursor: not-allowed;
   opacity: 0.55;
 }
 
 button:focus-visible,
-a:focus-visible {
+a:focus-visible,
+select:focus-visible {
   outline: 0;
   box-shadow: var(--focus);
 }
@@ -1467,6 +1473,257 @@ h2 {
   object-fit: contain;
 }
 
+.hidden-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.image-compress-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.image-upload-zone {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  min-height: 224px;
+  border: 2px dashed color-mix(in srgb, var(--primary) 34%, var(--line-strong));
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--primary);
+  padding: 24px;
+  text-align: center;
+}
+
+.image-upload-zone:hover {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 5%, var(--surface));
+}
+
+.image-upload-zone .icon {
+  width: 34px;
+  height: 34px;
+}
+
+.image-upload-zone strong {
+  font-size: 18px;
+  line-height: 1.35;
+}
+
+.image-upload-zone span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.image-list-panel {
+  display: grid;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.image-table-wrap {
+  max-height: 332px;
+  overflow: auto;
+  scrollbar-color: color-mix(in srgb, var(--primary) 42%, var(--line-strong)) color-mix(in srgb, var(--surface-2) 82%, transparent);
+  scrollbar-width: thin;
+}
+
+.image-table-wrap::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.image-table-wrap::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+}
+
+.image-table-wrap::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 44%, var(--line-strong));
+  background-clip: content-box;
+}
+
+.image-table-wrap::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--primary) 64%, var(--line-strong));
+  background-clip: content-box;
+}
+
+.image-table-wrap::-webkit-scrollbar-corner,
+.image-table-wrap::-webkit-scrollbar-button {
+  display: none;
+}
+
+.image-compress-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.image-compress-table th,
+.image-compress-table td {
+  height: 48px;
+  padding: 0 18px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.image-compress-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 44px;
+  background: var(--surface-3);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 720;
+}
+
+.image-compress-table th:nth-child(1) {
+  width: 34%;
+}
+
+.image-compress-table th:nth-child(2),
+.image-compress-table th:nth-child(4) {
+  width: 16%;
+}
+
+.image-compress-table th:nth-child(3) {
+  width: 24%;
+  text-align: center;
+}
+
+.image-compress-table th:nth-child(5) {
+  width: 10%;
+  text-align: center;
+}
+
+.image-compress-table td {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.image-compress-table td:nth-child(3),
+.image-compress-table td:nth-child(5) {
+  text-align: center;
+}
+
+.image-file-name {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-table-empty {
+  height: 56px !important;
+  color: var(--muted) !important;
+  font-family: var(--font-sans) !important;
+  text-align: center !important;
+}
+
+.image-status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 132px;
+  min-height: 28px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  padding: 0 14px;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.image-status-pill.is-done {
+  background: color-mix(in srgb, var(--success) 70%, #ffffff);
+  color: #063b20;
+}
+
+.image-status-pill.is-compressing {
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface-2));
+  color: var(--primary);
+}
+
+.image-status-pill.is-error {
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface-2));
+  color: var(--danger);
+}
+
+.image-row-download {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 78px;
+  min-height: 32px;
+  border: 1px solid var(--primary);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--primary) 6%, var(--surface));
+  color: var(--primary);
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.image-row-download:not(:disabled):hover {
+  background: color-mix(in srgb, var(--primary) 12%, var(--surface));
+}
+
+.image-list-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--surface-2);
+  padding: 10px 14px;
+}
+
+.image-main-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.image-start-button,
+.image-download-all {
+  min-width: 136px;
+  min-height: 36px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.loading-spinner {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: loading-spin 780ms linear infinite;
+}
+
+@keyframes loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .tool-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -1793,6 +2050,31 @@ textarea::placeholder {
     grid-template-columns: 1fr;
   }
 
+  .image-compress-panel {
+    gap: 10px;
+  }
+
+  .image-upload-zone {
+    min-height: 180px;
+    padding: 20px 12px;
+  }
+
+  .image-list-actions {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 12px;
+  }
+
+  .image-main-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .image-start-button,
+  .image-download-all {
+    width: 100%;
+  }
+
   .pet-install-panel {
     grid-template-columns: 1fr;
     align-items: flex-start;
@@ -1871,6 +2153,10 @@ textarea::placeholder {
 
   .pet-install-copy p {
     word-break: normal;
+  }
+
+  .image-upload-zone strong {
+    font-size: 16px;
   }
 
   .pet-lightbox {
@@ -2031,6 +2317,7 @@ textarea::placeholder {
   .soft-button:active,
   .icon-text-button:active,
   .compact-button:active,
+  .image-upload-zone:active,
   .primary-button:active,
   .secondary-button:active {
     transform: scale(0.98);

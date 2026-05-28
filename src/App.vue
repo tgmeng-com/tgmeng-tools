@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { zipSync } from "fflate";
 import { fetchOpenAIModels, runApiPurityCheck } from "./lib/apiPurity.js";
 import { runTransformTask } from "./lib/transform.js";
 
@@ -23,8 +24,18 @@ const tools = [
     keywords: "Codex 宠物,Codex pet,自定义宠物,TGMENG TOOLS",
   },
   {
+    key: "image-compress",
+    title: "图片压缩",
+    icon: "image",
+    group: "图片工具",
+    description: "纯前端图片极致压缩，自动找最小体积，下载保持原图片后缀。",
+    seoDescription: "TGMENG TOOLS 图片压缩工具，纯前端本地完成图片极致压缩，自动寻找最小体积，并保持原图片后缀下载。",
+    keywords: "图片压缩,在线图片压缩,极致压缩,WebP,AVIF,JPEG,PNG,纯前端图片压缩,TGMENG TOOLS",
+  },
+  {
     key: "json",
     title: "JSON 格式化",
+    navTitle: "Json",
     icon: "braces",
     group: "开发工具",
     description: "格式化、压缩和校验 JSON。",
@@ -34,6 +45,7 @@ const tools = [
   {
     key: "base64",
     title: "Base64 加解密",
+    navTitle: "Base64",
     icon: "binary",
     group: "开发工具",
     description: "UTF-8 文本与 Base64 互转。",
@@ -42,13 +54,13 @@ const tools = [
   },
 ];
 
-const groupOrder = ["AI工具", "开发工具"];
+const groupOrder = ["AI工具", "图片工具", "开发工具"];
 const defaultTool = "api-purity";
 const siteOrigin = "https://tools.tgmeng.com";
 const siteName = "TGMENG TOOLS";
 const siteTitle = "TGMENG TOOLS - 糖果梦工具箱";
-const siteDescription = "TGMENG TOOLS 是一个个人自用的小工具站，提供中转站纯度检测、JSON 格式化和 Base64 加解密等纯前端工具。";
-const siteKeywords = "TGMENG TOOLS,糖果梦工具箱,中转站纯度检测,JSON 格式化,Base64 加解密,纯前端工具";
+const siteDescription = "TGMENG TOOLS 是一个个人自用的小工具站，提供中转站纯度检测、图片极致压缩、JSON 格式化和 Base64 加解密等纯前端工具。";
+const siteKeywords = "TGMENG TOOLS,糖果梦工具箱,中转站纯度检测,图片压缩,JSON 格式化,Base64 加解密,纯前端工具";
 const siteImage = `${siteOrigin}/assets/logo.png`;
 
 const petPackages = [
@@ -143,12 +155,13 @@ const search = ref("");
 const sidebarOpen = ref(false);
 const sidebarCollapsed = ref(localStorage.getItem(storageKeys.sidebarCollapsed) === "true");
 const collapsedGroups = reactive(loadCollapsedGroups());
-const busy = reactive({ base64: false, json: false, apiPurity: false, apiModels: false });
+const busy = reactive({ base64: false, json: false, apiPurity: false, apiModels: false, imageCompress: false, imageDownloadAll: false });
 const feedback = reactive({
   base64: { message: "", type: "" },
   json: { message: "", type: "" },
   apiPurity: { message: "", type: "" },
   codexPets: { message: "", type: "" },
+  imageCompress: { message: "", type: "" },
 });
 const meta = reactive({
   base64Input: 0,
@@ -165,6 +178,21 @@ const jsonTree = ref(null);
 const workspace = ref(null);
 const jsonIndent = ref(2);
 const selectedPetPreview = ref(null);
+const imageFileInput = ref(null);
+const imageCompressOptions = reactive({
+  mode: "ultra",
+  outputMode: "smallest",
+  dimensionMode: "smart",
+  keepOriginalExtension: true,
+});
+const imageCompressState = reactive({
+  files: [],
+  items: [],
+  results: [],
+  progress: 0,
+  total: 0,
+  currentName: "",
+});
 const apiPurityForm = reactive({
   baseUrl: "",
   apiKey: "",
@@ -229,6 +257,33 @@ const apiCliHint = computed(() => {
   }
 
   return "CLI 返回 404 时，优先看 Chat 地址和模型 ID；很多中转会把未知模型或错误路径都返回成 404。";
+});
+const imageCompressSummary = computed(() => {
+  const results = imageCompressState.items.filter((item) => item.status === "done");
+  const originalBytes = results.reduce((total, item) => total + item.originalBytes, 0);
+  const compressedBytes = results.reduce((total, item) => total + item.compressedBytes, 0);
+  const savedBytes = Math.max(0, originalBytes - compressedBytes);
+  const savedPercent = originalBytes ? Math.round((savedBytes / originalBytes) * 100) : 0;
+  const bestRatio = results.reduce((best, item) => Math.max(best, item.savedPercent), 0);
+
+  return {
+    count: results.length,
+    originalBytes,
+    compressedBytes,
+    savedBytes,
+    savedPercent,
+    bestRatio,
+  };
+});
+const imageCompressCanRun = computed(() => {
+  return (
+    imageCompressState.items.length > 0 &&
+    !busy.imageCompress &&
+    imageCompressState.items.some((item) => item.status !== "done")
+  );
+});
+const imageCompressCanDownloadAll = computed(() => {
+  return !busy.imageCompress && !busy.imageDownloadAll && imageCompressState.items.some((item) => item.status === "done");
 });
 const apiCliDemos = computed(() => {
   const endpoints = apiCliEndpoints.value;
@@ -460,6 +515,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("popstate", handleRouteChange);
   document.removeEventListener("keydown", handleKeydown);
   stopApiPurityCheck();
+  imageCompressState.results.forEach((item) => revokeObjectUrls(item));
 
   if (worker) {
     worker.terminate();
@@ -648,7 +704,11 @@ function disableWorker() {
 
   pendingJobs.forEach((job) => {
     try {
-      job.resolve(runTransformTask(job.task, job.payload));
+      if (job.task === "image-compress") {
+        job.resolve(runImageCompressFallback(job.payload));
+      } else {
+        job.resolve(runTransformTask(job.task, job.payload));
+      }
     } catch (error) {
       job.reject(error);
     }
@@ -658,6 +718,10 @@ function disableWorker() {
 
 function runTask(task, payload) {
   if (!worker) {
+    if (task === "image-compress") {
+      return runImageCompressFallback(payload);
+    }
+
     return Promise.resolve(runTransformTask(task, payload));
   }
 
@@ -670,9 +734,18 @@ function runTask(task, payload) {
       worker.postMessage({ id, task, payload });
     } catch (error) {
       pendingJobs.delete(id);
-      resolve(runTransformTask(task, payload));
+      if (task === "image-compress") {
+        resolve(runImageCompressFallback(payload));
+      } else {
+        resolve(runTransformTask(task, payload));
+      }
     }
   });
+}
+
+async function runImageCompressFallback(payload) {
+  const { compressImageFile } = await import("./lib/imageCompress.js");
+  return compressImageFile(payload.file, payload.options);
 }
 
 function queueMetaUpdate() {
@@ -1178,6 +1251,239 @@ function closePetPreview() {
   selectedPetPreview.value = null;
 }
 
+function handleImageFileChange(event) {
+  setImageFiles(event.target.files);
+}
+
+function handleImageDrop(event) {
+  setImageFiles(event.dataTransfer?.files);
+}
+
+function setImageFiles(fileList) {
+  const files = Array.from(fileList || []).filter((file) => file.type?.startsWith("image/"));
+
+  imageCompressState.files = files;
+  imageCompressState.items.forEach((item) => revokeObjectUrls(item));
+  imageCompressState.items = files.map((file) => createImagePendingItem(file));
+  imageCompressState.results = [];
+  imageCompressState.progress = 0;
+  imageCompressState.total = files.length;
+  imageCompressState.currentName = "";
+
+  if (!files.length) {
+    setFeedback("imageCompress", "请选择 JPG、PNG、WebP 或 AVIF 图片。", "warning");
+    return;
+  }
+
+  setFeedback("imageCompress", `已选择 ${files.length} 张图片。`, "success");
+}
+
+function chooseImageFiles() {
+  imageFileInput.value?.click();
+}
+
+async function startImageCompress() {
+  if (!imageCompressState.files.length) {
+    setFeedback("imageCompress", "请先选择图片。", "warning");
+    return;
+  }
+
+  imageCompressState.items.forEach((item) => {
+    if (item.status !== "pending") revokeObjectUrls(item);
+  });
+  imageCompressState.items = imageCompressState.files.map((file) => createImagePendingItem(file));
+  imageCompressState.results = [];
+  imageCompressState.progress = 0;
+  imageCompressState.total = imageCompressState.files.length;
+  busy.imageCompress = true;
+  setFeedback("imageCompress", "正在压缩...");
+
+  try {
+    for (let index = 0; index < imageCompressState.files.length; index += 1) {
+      const file = imageCompressState.files[index];
+      imageCompressState.currentName = file.name;
+      updateImageItem(index, { status: "compressing", statusText: "压缩中" });
+
+      try {
+        const result = await runTask("image-compress", {
+          file,
+          options: {
+            mode: imageCompressOptions.mode,
+            outputMode: imageCompressOptions.outputMode,
+            dimensionMode: imageCompressOptions.dimensionMode,
+            keepOriginalExtension: imageCompressOptions.keepOriginalExtension,
+          },
+        });
+
+        const originalUrl = URL.createObjectURL(file);
+        const outputUrl = URL.createObjectURL(result.blob);
+        const normalized = normalizeImageCompressResult(file, result, originalUrl, outputUrl);
+        updateImageItem(index, normalized);
+        imageCompressState.results = imageCompressState.items.filter((item) => item.status === "done");
+      } catch (error) {
+        updateImageItem(index, {
+          status: "error",
+          statusText: error.message || "压缩失败",
+        });
+      } finally {
+        imageCompressState.progress += 1;
+      }
+    }
+
+    const summary = imageCompressSummary.value;
+    setFeedback(
+      "imageCompress",
+      `完成 ${summary.count} 张，节省 ${formatBytes(summary.savedBytes)}，整体减少 ${summary.savedPercent}%。`,
+      summary.count ? "success" : "warning",
+    );
+  } catch (error) {
+    setFeedback("imageCompress", error.message || "图片压缩失败。", "error");
+  } finally {
+    busy.imageCompress = false;
+    imageCompressState.currentName = "";
+  }
+}
+
+function createImagePendingItem(file) {
+  return {
+    id: `${file.name}-${file.size}-${file.lastModified}`,
+    file,
+    sourceName: file.name,
+    originalBytes: file.size,
+    compressedBytes: 0,
+    savedBytes: 0,
+    savedPercent: 0,
+    status: "pending",
+    statusText: "等待压缩",
+    name: "",
+    outputUrl: "",
+    originalUrl: "",
+  };
+}
+
+function updateImageItem(index, patch) {
+  const current = imageCompressState.items[index];
+  if (!current) return;
+  imageCompressState.items.splice(index, 1, { ...current, ...patch });
+}
+
+function normalizeImageCompressResult(file, result, originalUrl, outputUrl) {
+  const savedBytes = Math.max(0, result.originalBytes - result.compressedBytes);
+  const savedPercent = result.originalBytes ? Math.round((savedBytes / result.originalBytes) * 100) : 0;
+
+  return {
+    ...result,
+    id: `${file.name}-${file.size}-${file.lastModified}-${Date.now()}`,
+    sourceName: file.name,
+    blob: result.blob,
+    originalUrl,
+    outputUrl,
+    savedBytes,
+    savedPercent,
+    status: "done",
+    statusText: savedPercent > 0 ? `已压缩 ${savedPercent}%` : "已处理",
+    scoreLabel: Number.isFinite(result.score) ? result.score.toFixed(2) : "100.00",
+    qualityLabel: Number.isFinite(result.quality) ? Math.round(result.quality * 100) : "--",
+  };
+}
+
+function clearImageCompress() {
+  imageCompressState.items.forEach((item) => revokeObjectUrls(item));
+  imageCompressState.files = [];
+  imageCompressState.items = [];
+  imageCompressState.results = [];
+  imageCompressState.progress = 0;
+  imageCompressState.total = 0;
+  imageCompressState.currentName = "";
+
+  if (imageFileInput.value) {
+    imageFileInput.value.value = "";
+  }
+
+  setFeedback("imageCompress", "已清空。", "success");
+}
+
+function revokeObjectUrls(item) {
+  if (item.originalUrl) URL.revokeObjectURL(item.originalUrl);
+  if (item.outputUrl) URL.revokeObjectURL(item.outputUrl);
+}
+
+function downloadImageResult(item) {
+  triggerDownload(item.outputUrl, item.name);
+  setFeedback("imageCompress", `${item.name} 已开始下载。`, "success");
+}
+
+async function downloadAllImageResults() {
+  const results = imageCompressState.items.filter((item) => item.status === "done");
+  if (!results.length) {
+    setFeedback("imageCompress", "没有可下载的结果。", "warning");
+    return;
+  }
+
+  if (results.length === 1) {
+    downloadImageResult(results[0]);
+    return;
+  }
+
+  busy.imageDownloadAll = true;
+  setFeedback("imageCompress", "正在打包...");
+
+  try {
+    const files = {};
+    const usedNames = new Set();
+
+    for (const item of results) {
+      const arrayBuffer = await item.blob.arrayBuffer();
+      files[getUniqueZipName(item.name, usedNames)] = new Uint8Array(arrayBuffer);
+    }
+
+    const zipData = zipSync(files, { level: 0 });
+    const zipBlob = new Blob([zipData], { type: "application/zip" });
+    const zipUrl = URL.createObjectURL(zipBlob);
+    triggerDownload(zipUrl, `tgmeng-images-${formatDateForFile(new Date())}.zip`);
+    window.setTimeout(() => URL.revokeObjectURL(zipUrl), 30000);
+    setFeedback("imageCompress", `已打包 ${results.length} 个文件并开始下载。`, "success");
+  } catch (error) {
+    setFeedback("imageCompress", error.message || "打包下载失败。", "error");
+  } finally {
+    busy.imageDownloadAll = false;
+  }
+}
+
+function triggerDownload(url, name) {
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = name;
+  anchor.click();
+}
+
+function getUniqueZipName(name, usedNames) {
+  const fallbackName = "image";
+  const rawName = String(name || fallbackName).replace(/[\\/:*?"<>|]/g, "_") || fallbackName;
+  if (!usedNames.has(rawName)) {
+    usedNames.add(rawName);
+    return rawName;
+  }
+
+  const baseName = rawName.replace(/\.[^.]+$/, "") || fallbackName;
+  const extension = rawName.match(/(\.[^.]+)$/)?.[1] || "";
+  let index = 2;
+  let candidate = `${baseName}-${index}${extension}`;
+
+  while (usedNames.has(candidate)) {
+    index += 1;
+    candidate = `${baseName}-${index}${extension}`;
+  }
+
+  usedNames.add(candidate);
+  return candidate;
+}
+
+function formatDateForFile(date) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
 function getPetDownloadUrl(pet) {
   return `${siteOrigin}${pet.download}`;
 }
@@ -1362,6 +1668,14 @@ async function copyText(textarea, tool) {
     <symbol id="icon-folder" viewBox="0 0 24 24">
       <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
     </symbol>
+    <symbol id="icon-image" viewBox="0 0 24 24">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <circle cx="8.5" cy="8.5" r="1.5" />
+      <path d="m21 15-5-5L5 21" />
+    </symbol>
+    <symbol id="icon-upload" viewBox="0 0 24 24">
+      <path d="M12 16V4M7 9l5-5 5 5M4 20h16" />
+    </symbol>
     <symbol id="icon-x" viewBox="0 0 24 24">
       <path d="M18 6 6 18M6 6l12 12" />
     </symbol>
@@ -1433,12 +1747,12 @@ async function copyText(textarea, tool) {
               class="tool-link"
               :class="{ 'is-active': activeTool === tool.key }"
               type="button"
-              :title="tool.title"
+              :title="tool.navTitle || tool.title"
               :tabindex="isGroupClosed(group.group) ? -1 : 0"
               :aria-current="activeTool === tool.key ? 'page' : undefined"
               @click="activateTool(tool.key)"
             >
-              <span>{{ tool.title }}</span>
+              <span>{{ tool.navTitle || tool.title }}</span>
             </button>
           </div>
         </template>
@@ -1795,6 +2109,102 @@ async function copyText(textarea, tool) {
             </div>
           </div>
         </Transition>
+      </section>
+
+      <section v-show="activeTool === 'image-compress'" class="tool-view image-compress-view" aria-labelledby="imageCompressTitle">
+        <h2 id="imageCompressTitle" class="sr-only">图片压缩</h2>
+        <section class="image-compress-panel" aria-label="图片压缩">
+          <button
+            class="image-upload-zone"
+            type="button"
+            :disabled="busy.imageCompress"
+            @click="chooseImageFiles"
+            @dragover.prevent
+            @drop.prevent="handleImageDrop"
+          >
+            <svg class="icon" aria-hidden="true"><use href="#icon-upload"></use></svg>
+            <strong>点击选择 或 将图片拖拽到此处</strong>
+            <span>支持 JPG、PNG、WebP、AVIF 图片格式</span>
+          </button>
+          <input
+            ref="imageFileInput"
+            class="hidden-file-input"
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/avif"
+            multiple
+            :disabled="busy.imageCompress"
+            @change="handleImageFileChange"
+          />
+
+          <div class="image-list-panel">
+            <div class="image-table-wrap" aria-label="图片列表">
+              <table class="image-compress-table">
+                <thead>
+                  <tr>
+                    <th>文件名</th>
+                    <th>压缩前</th>
+                    <th>状态</th>
+                    <th>压缩后</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="!imageCompressState.items.length">
+                    <td colspan="5" class="image-table-empty">请选择图片</td>
+                  </tr>
+                  <tr v-for="item in imageCompressState.items" :key="item.id">
+                    <td>
+                      <span class="image-file-name" :title="item.sourceName">{{ item.sourceName }}</span>
+                    </td>
+                    <td>{{ formatBytes(item.originalBytes) }}</td>
+                  <td>
+                    <span class="image-status-pill" :class="`is-${item.status}`">
+                      <span v-if="item.status === 'compressing'" class="loading-spinner" aria-hidden="true"></span>
+                      {{ item.statusText }}
+                    </span>
+                  </td>
+                    <td>{{ item.status === "done" ? formatBytes(item.compressedBytes) : "--" }}</td>
+                    <td>
+                      <button
+                        class="image-row-download"
+                        type="button"
+                        :disabled="item.status !== 'done'"
+                        @click="downloadImageResult(item)"
+                      >
+                        下载
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="image-list-actions">
+              <div class="primary-actions">
+                <button class="secondary-button" type="button" :disabled="busy.imageCompress || !imageCompressState.items.length" @click="clearImageCompress">
+                  <svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>
+                  清空列表
+                </button>
+              </div>
+              <div class="image-main-actions">
+                <button class="primary-button image-start-button" type="button" :disabled="!imageCompressCanRun" @click="startImageCompress">
+                  <span v-if="busy.imageCompress" class="loading-spinner" aria-hidden="true"></span>
+                  <svg v-else class="icon" aria-hidden="true"><use href="#icon-play"></use></svg>
+                  {{ busy.imageCompress ? "压缩中" : "开始压缩" }}
+                </button>
+                <button class="primary-button image-download-all" type="button" :disabled="!imageCompressCanDownloadAll" @click="downloadAllImageResults">
+                  <span v-if="busy.imageDownloadAll" class="loading-spinner" aria-hidden="true"></span>
+                  <svg v-else class="icon" aria-hidden="true"><use href="#icon-download"></use></svg>
+                  {{ busy.imageDownloadAll ? "打包中" : "下载全部" }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <p class="feedback" :class="feedback.imageCompress.type && `is-${feedback.imageCompress.type}`" role="status" aria-live="polite">
+          {{ feedback.imageCompress.message }}
+        </p>
       </section>
 
       <section v-show="activeTool === 'base64'" class="tool-view" aria-labelledby="base64Title">

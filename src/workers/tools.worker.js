@@ -1,13 +1,18 @@
 import { runTransformTask } from "../lib/transform.js";
+import { compressImageFile } from "../lib/imageCompress.js";
 
-self.addEventListener("message", (event) => {
+self.addEventListener("message", async (event) => {
   const { id, task, payload } = event.data;
 
   try {
+    const result = task === "image-compress"
+      ? await compressImageFile(payload.file, payload.options)
+      : runTransformTask(task, payload);
+
     self.postMessage({
       id,
       ok: true,
-      result: runTransformTask(task, payload),
+      result,
     });
   } catch (error) {
     self.postMessage({
