@@ -42,6 +42,15 @@ const tools = [
     keywords: "图片水印,在线图片水印,文字水印,水印预览,纯前端图片水印,TGMENG TOOLS",
   },
   {
+    key: "audio-quality",
+    title: "音质修改",
+    icon: "wrench",
+    group: "音乐工具",
+    description: "将音乐转换为指定格式、码率、采样率和文件大小要求。",
+    seoDescription: "TGMENG TOOLS 音质修改工具，纯前端将音乐转换为 MP3 或 WAV，并设置码率、采样率和文件大小要求。",
+    keywords: "音质修改,音乐格式转换,MP3转换,WAV转换,码率,采样率,TGMENG TOOLS",
+  },
+  {
     key: "json",
     title: "JSON 格式化",
     navTitle: "Json",
@@ -78,7 +87,7 @@ const sidebarExternalLinks = [
   },
 ];
 
-const groupOrder = ["AI工具", "图片工具", "开发工具", "关于作者"];
+const groupOrder = ["AI工具", "图片工具", "音乐工具", "开发工具", "关于作者"];
 const defaultTool = "api-purity";
 const siteOrigin = "https://tools.tgmeng.com";
 const siteName = "TGMENG TOOLS";
@@ -179,7 +188,7 @@ const search = ref("");
 const sidebarOpen = ref(false);
 const sidebarCollapsed = ref(localStorage.getItem(storageKeys.sidebarCollapsed) === "true");
 const collapsedGroups = reactive(loadCollapsedGroups());
-const busy = reactive({ base64: false, json: false, apiPurity: false, apiModels: false, imageCompress: false, imageDownloadAll: false });
+const busy = reactive({ base64: false, json: false, apiPurity: false, apiModels: false, imageCompress: false, imageDownloadAll: false, audioQuality: false });
 const feedback = reactive({
   base64: { message: "", type: "" },
   json: { message: "", type: "" },
@@ -187,6 +196,7 @@ const feedback = reactive({
   codexPets: { message: "", type: "" },
   imageCompress: { message: "", type: "" },
   imageWatermark: { message: "", type: "" },
+  audioQuality: { message: "", type: "" },
 });
 const meta = reactive({
   base64Input: 0,
@@ -205,6 +215,7 @@ const jsonIndent = ref(2);
 const selectedPetPreview = ref(null);
 const imageFileInput = ref(null);
 const watermarkFileInput = ref(null);
+const audioQualityFileInput = ref(null);
 const watermarkCanvas = ref(null);
 const imageCompressOptions = reactive({
   mode: "ultra",
@@ -232,6 +243,29 @@ const watermarkState = reactive({
   items: [],
   activeId: "",
 });
+const audioQualityOptions = reactive({
+  format: "mp3",
+  bitrate: { operator: "gt", value: 320 },
+  sampleRate: { operator: "gt", value: 44.1 },
+  size: { operator: "lt", value: 200 },
+});
+const audioFormatOptions = [
+  { label: "MP3", value: "mp3" },
+  { label: "WAV", value: "wav" },
+];
+const audioOperatorOptions = [
+  { label: "大于", value: "gt" },
+  { label: "等于", value: "eq" },
+  { label: "小于", value: "lt" },
+];
+const audioQualityState = reactive({
+  files: [],
+  items: [],
+  progress: 0,
+  total: 0,
+  currentName: "",
+});
+const openAudioSelect = ref("");
 const apiPurityForm = reactive({
   baseUrl: "",
   apiKey: "",
@@ -323,6 +357,9 @@ const imageCompressCanRun = computed(() => {
 });
 const imageCompressCanDownloadAll = computed(() => {
   return !busy.imageCompress && !busy.imageDownloadAll && imageCompressState.items.some((item) => item.status === "done");
+});
+const audioQualityCanDownloadAll = computed(() => {
+  return !busy.audioQuality && audioQualityState.items.some((item) => item.status === "done");
 });
 const activeWatermarkItem = computed(() => {
   return watermarkState.items.find((item) => item.id === watermarkState.activeId) || watermarkState.items[0] || null;
@@ -567,6 +604,7 @@ onBeforeUnmount(() => {
   stopApiPurityCheck();
   imageCompressState.results.forEach((item) => revokeObjectUrls(item));
   clearWatermarkSource(false);
+  clearAudioQuality(false);
 
   if (worker) {
     worker.terminate();
@@ -706,6 +744,7 @@ function handleKeydown(event) {
   if (event.key === "Escape") {
     selectedPetPreview.value = null;
     sidebarOpen.value = false;
+    openAudioSelect.value = "";
   }
 }
 
@@ -1318,6 +1357,14 @@ function handleWatermarkDrop(event) {
   setWatermarkFiles(event.dataTransfer?.files);
 }
 
+function handleAudioQualityFileChange(event) {
+  setAudioQualityFiles(event.target.files);
+}
+
+function handleAudioQualityDrop(event) {
+  setAudioQualityFiles(event.dataTransfer?.files);
+}
+
 function setImageFiles(fileList) {
   const files = Array.from(fileList || []).filter((file) => file.type?.startsWith("image/"));
 
@@ -1343,6 +1390,10 @@ function chooseImageFiles() {
 
 function chooseWatermarkFile() {
   watermarkFileInput.value?.click();
+}
+
+function chooseAudioQualityFile() {
+  audioQualityFileInput.value?.click();
 }
 
 async function setWatermarkFiles(fileList) {
@@ -1581,6 +1632,200 @@ function clearWatermarkSource(showFeedback = true) {
 
   if (showFeedback) {
     setFeedback("imageWatermark", "已清空。", "success");
+  }
+}
+
+function setAudioQualityFiles(fileList) {
+  const files = Array.from(fileList || []).filter((file) => file.type?.startsWith("audio/"));
+
+  if (!files.length) {
+    setFeedback("audioQuality", "请选择音频文件。", "warning");
+    return;
+  }
+
+  clearAudioQuality(false);
+  audioQualityState.files = files;
+  audioQualityState.items = files.map((file) => createAudioQualityPendingItem(file));
+  audioQualityState.total = files.length;
+  setFeedback("audioQuality", `已选择 ${files.length} 个音乐文件。`, "success");
+}
+
+function applyAudioQualityPreset(preset) {
+  if (preset === "netease") {
+    audioQualityOptions.format = "mp3";
+    audioQualityOptions.bitrate.operator = "gt";
+    audioQualityOptions.bitrate.value = 320;
+    audioQualityOptions.sampleRate.operator = "gt";
+    audioQualityOptions.sampleRate.value = 44.1;
+    audioQualityOptions.size.operator = "lt";
+    audioQualityOptions.size.value = 200;
+    setFeedback("audioQuality", "已套用网易云示例：MP3、>320kbps、>44.1kHz、<200MB。", "success");
+  }
+}
+
+function getAudioSelectLabel(options, value) {
+  return options.find((item) => item.value === value)?.label || options[0]?.label || "";
+}
+
+function toggleAudioSelect(name) {
+  openAudioSelect.value = openAudioSelect.value === name ? "" : name;
+}
+
+function chooseAudioSelect(name, target, value) {
+  target.value = value;
+  openAudioSelect.value = "";
+}
+
+async function startAudioQualityConvert() {
+  if (!audioQualityState.files.length) {
+    setFeedback("audioQuality", "请先选择音乐文件。", "warning");
+    return;
+  }
+
+  busy.audioQuality = true;
+  audioQualityState.items.forEach((item) => {
+    if (item.outputUrl) URL.revokeObjectURL(item.outputUrl);
+  });
+  audioQualityState.items = audioQualityState.files.map((file) => createAudioQualityPendingItem(file));
+  audioQualityState.progress = 0;
+  audioQualityState.total = audioQualityState.files.length;
+  audioQualityState.currentName = "";
+  setFeedback("audioQuality", "正在转换音频，文件越大耗时越久...");
+
+  try {
+    const { convertAudioQuality } = await import("./lib/audioQuality.js");
+
+    for (let index = 0; index < audioQualityState.files.length; index += 1) {
+      const file = audioQualityState.files[index];
+      audioQualityState.currentName = file.name;
+      updateAudioQualityItem(index, { status: "processing", statusText: "转换中" });
+
+      try {
+        const result = await convertAudioQuality(file, audioQualityOptions);
+        const outputUrl = URL.createObjectURL(result.blob);
+        updateAudioQualityItem(index, normalizeAudioQualityResult(file, result, outputUrl));
+      } catch (error) {
+        updateAudioQualityItem(index, {
+          status: "error",
+          statusText: "转换失败",
+          error: error.message || "浏览器无法解码该音频",
+        });
+      } finally {
+        audioQualityState.progress += 1;
+      }
+    }
+
+    const doneCount = audioQualityState.items.filter((item) => item.status === "done").length;
+    setFeedback("audioQuality", doneCount ? `已完成 ${doneCount}/${audioQualityState.total} 个音频转换。` : "音频转换失败，请换一批浏览器支持解码的文件。", doneCount ? "success" : "error");
+  } finally {
+    busy.audioQuality = false;
+    audioQualityState.currentName = "";
+  }
+}
+
+function downloadAudioQualityResult(item) {
+  if (!item?.outputUrl || item.status !== "done") {
+    setFeedback("audioQuality", "没有可下载的音频。", "warning");
+    return;
+  }
+
+  triggerDownload(item.outputUrl, item.name);
+  setFeedback("audioQuality", `${item.name} 已开始下载。`, "success");
+}
+
+function clearAudioQuality(showFeedback = true) {
+  revokeAudioQualityOutputs();
+  audioQualityState.files = [];
+  audioQualityState.items = [];
+  audioQualityState.progress = 0;
+  audioQualityState.total = 0;
+  audioQualityState.currentName = "";
+
+  if (audioQualityFileInput.value) {
+    audioQualityFileInput.value.value = "";
+  }
+
+  if (showFeedback) {
+    setFeedback("audioQuality", "已清空。", "success");
+  }
+}
+
+function revokeAudioQualityOutputs() {
+  audioQualityState.items.forEach((item) => {
+    if (item.outputUrl) URL.revokeObjectURL(item.outputUrl);
+  });
+}
+
+function createAudioQualityPendingItem(file) {
+  return {
+    id: `${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2)}`,
+    file,
+    sourceName: file.name,
+    originalBytes: file.size,
+    outputBytes: 0,
+    format: "",
+    sampleRate: 0,
+    bitrate: 0,
+    blob: null,
+    name: "",
+    outputUrl: "",
+    status: "pending",
+    statusText: "等待转换",
+    error: "",
+  };
+}
+
+function updateAudioQualityItem(index, patch) {
+  const current = audioQualityState.items[index];
+  if (!current) return;
+  audioQualityState.items.splice(index, 1, { ...current, ...patch });
+}
+
+function normalizeAudioQualityResult(file, result, outputUrl) {
+  return {
+    ...result,
+    id: `${file.name}-${file.size}-${file.lastModified}-${Date.now()}`,
+    sourceName: file.name,
+    originalBytes: file.size,
+    outputBytes: result.outputBytes,
+    outputUrl,
+    status: "done",
+    statusText: "已生成",
+    error: "",
+  };
+}
+
+async function downloadAllAudioQualityResults() {
+  const results = audioQualityState.items.filter((item) => item.status === "done");
+  if (!results.length) {
+    setFeedback("audioQuality", "没有可下载的音频。", "warning");
+    return;
+  }
+
+  if (results.length === 1) {
+    downloadAudioQualityResult(results[0]);
+    return;
+  }
+
+  setFeedback("audioQuality", "正在打包音频...");
+
+  try {
+    const files = {};
+    const usedNames = new Set();
+
+    for (const item of results) {
+      const arrayBuffer = await item.blob.arrayBuffer();
+      files[getUniqueZipName(item.name, usedNames)] = new Uint8Array(arrayBuffer);
+    }
+
+    const zipData = zipSync(files, { level: 0 });
+    const zipBlob = new Blob([zipData], { type: "application/zip" });
+    const zipUrl = URL.createObjectURL(zipBlob);
+    triggerDownload(zipUrl, `tgmeng-audio-${formatDateForFile(new Date())}.zip`);
+    window.setTimeout(() => URL.revokeObjectURL(zipUrl), 30000);
+    setFeedback("audioQuality", `已打包 ${results.length} 个音频并开始下载。`, "success");
+  } catch (error) {
+    setFeedback("audioQuality", error.message || "打包音频失败。", "error");
   }
 }
 
@@ -2696,6 +2941,228 @@ async function copyText(textarea, tool) {
 
         <p class="feedback" :class="feedback.imageWatermark.type && `is-${feedback.imageWatermark.type}`" role="status" aria-live="polite">
           {{ feedback.imageWatermark.message }}
+        </p>
+      </section>
+
+      <section v-show="activeTool === 'audio-quality'" class="tool-view audio-quality-view" aria-labelledby="audioQualityTitle">
+        <h2 id="audioQualityTitle" class="sr-only">音质修改</h2>
+        <section class="image-compress-panel audio-quality-panel" aria-label="音质修改">
+          <button
+            class="image-upload-zone audio-upload-zone"
+            type="button"
+            :disabled="busy.audioQuality"
+            @click="chooseAudioQualityFile"
+            @dragover.prevent
+            @drop.prevent="handleAudioQualityDrop"
+          >
+            <svg class="icon" aria-hidden="true"><use href="#icon-upload"></use></svg>
+            <strong>点击选择 或 将音乐拖拽到此处</strong>
+            <span>支持浏览器可解码的音频文件，转换在本地完成</span>
+          </button>
+          <input
+            ref="audioQualityFileInput"
+            class="hidden-file-input"
+            type="file"
+            accept="audio/*"
+            multiple
+            :disabled="busy.audioQuality"
+            @change="handleAudioQualityFileChange"
+          />
+
+          <section class="work-panel audio-quality-settings" aria-labelledby="audioQualitySettingsTitle">
+            <div class="panel-head">
+              <label id="audioQualitySettingsTitle">转换要求</label>
+              <span>{{ audioQualityState.items.length ? `${audioQualityState.items.length} 个音乐文件` : "等待音乐" }}</span>
+            </div>
+            <div class="audio-quality-form">
+              <div class="audio-preset-row">
+                <button class="secondary-button audio-preset-button" type="button" @click="applyAudioQualityPreset('netease')">
+                  网易云示例
+                </button>
+              </div>
+
+              <label class="audio-setting-field">
+                <span>输出格式</span>
+                <div class="audio-select" :class="{ 'is-open': openAudioSelect === 'format' }" @focusout="openAudioSelect = ''">
+                  <button
+                    class="audio-select-trigger"
+                    type="button"
+                    :aria-expanded="openAudioSelect === 'format'"
+                    @click.stop="toggleAudioSelect('format')"
+                  >
+                    <span>{{ getAudioSelectLabel(audioFormatOptions, audioQualityOptions.format) }}</span>
+                    <svg class="icon" aria-hidden="true"><use href="#icon-chevron-right"></use></svg>
+                  </button>
+                  <div v-if="openAudioSelect === 'format'" class="audio-select-menu">
+                    <button
+                      v-for="option in audioFormatOptions"
+                      :key="option.value"
+                      class="audio-select-option"
+                      :class="{ 'is-selected': audioQualityOptions.format === option.value }"
+                      type="button"
+                      @mousedown.prevent="chooseAudioSelect('format', audioQualityOptions, option.value)"
+                    >
+                      {{ option.label }}
+                    </button>
+                  </div>
+                </div>
+              </label>
+
+              <label class="audio-rule-field">
+                <span>音质</span>
+                <div class="audio-select" :class="{ 'is-open': openAudioSelect === 'bitrate' }" @focusout="openAudioSelect = ''">
+                  <button
+                    class="audio-select-trigger"
+                    type="button"
+                    :aria-expanded="openAudioSelect === 'bitrate'"
+                    @click.stop="toggleAudioSelect('bitrate')"
+                  >
+                    <span>{{ getAudioSelectLabel(audioOperatorOptions, audioQualityOptions.bitrate.operator) }}</span>
+                    <svg class="icon" aria-hidden="true"><use href="#icon-chevron-right"></use></svg>
+                  </button>
+                  <div v-if="openAudioSelect === 'bitrate'" class="audio-select-menu">
+                    <button
+                      v-for="option in audioOperatorOptions"
+                      :key="option.value"
+                      class="audio-select-option"
+                      :class="{ 'is-selected': audioQualityOptions.bitrate.operator === option.value }"
+                      type="button"
+                      @mousedown.prevent="chooseAudioSelect('bitrate', audioQualityOptions.bitrate, option.value)"
+                    >
+                      {{ option.label }}
+                    </button>
+                  </div>
+                </div>
+                <input v-model.number="audioQualityOptions.bitrate.value" class="form-input" type="number" min="32" max="320" step="1" />
+                <em>kbps</em>
+              </label>
+
+              <label class="audio-rule-field">
+                <span>采样率</span>
+                <div class="audio-select" :class="{ 'is-open': openAudioSelect === 'sampleRate' }" @focusout="openAudioSelect = ''">
+                  <button
+                    class="audio-select-trigger"
+                    type="button"
+                    :aria-expanded="openAudioSelect === 'sampleRate'"
+                    @click.stop="toggleAudioSelect('sampleRate')"
+                  >
+                    <span>{{ getAudioSelectLabel(audioOperatorOptions, audioQualityOptions.sampleRate.operator) }}</span>
+                    <svg class="icon" aria-hidden="true"><use href="#icon-chevron-right"></use></svg>
+                  </button>
+                  <div v-if="openAudioSelect === 'sampleRate'" class="audio-select-menu">
+                    <button
+                      v-for="option in audioOperatorOptions"
+                      :key="option.value"
+                      class="audio-select-option"
+                      :class="{ 'is-selected': audioQualityOptions.sampleRate.operator === option.value }"
+                      type="button"
+                      @mousedown.prevent="chooseAudioSelect('sampleRate', audioQualityOptions.sampleRate, option.value)"
+                    >
+                      {{ option.label }}
+                    </button>
+                  </div>
+                </div>
+                <input v-model.number="audioQualityOptions.sampleRate.value" class="form-input" type="number" min="8" max="192" step="0.1" />
+                <em>kHz</em>
+              </label>
+
+              <label class="audio-rule-field">
+                <span>文件大小</span>
+                <div class="audio-select" :class="{ 'is-open': openAudioSelect === 'size' }" @focusout="openAudioSelect = ''">
+                  <button
+                    class="audio-select-trigger"
+                    type="button"
+                    :aria-expanded="openAudioSelect === 'size'"
+                    @click.stop="toggleAudioSelect('size')"
+                  >
+                    <span>{{ getAudioSelectLabel(audioOperatorOptions, audioQualityOptions.size.operator) }}</span>
+                    <svg class="icon" aria-hidden="true"><use href="#icon-chevron-right"></use></svg>
+                  </button>
+                  <div v-if="openAudioSelect === 'size'" class="audio-select-menu">
+                    <button
+                      v-for="option in audioOperatorOptions"
+                      :key="option.value"
+                      class="audio-select-option"
+                      :class="{ 'is-selected': audioQualityOptions.size.operator === option.value }"
+                      type="button"
+                      @mousedown.prevent="chooseAudioSelect('size', audioQualityOptions.size, option.value)"
+                    >
+                      {{ option.label }}
+                    </button>
+                  </div>
+                </div>
+                <input v-model.number="audioQualityOptions.size.value" class="form-input" type="number" min="1" max="2048" step="1" />
+                <em>MB</em>
+              </label>
+            </div>
+          </section>
+
+          <div class="image-list-panel audio-quality-list-panel">
+            <div class="image-table-wrap" aria-label="音乐转换列表">
+              <table class="image-compress-table audio-quality-table">
+                <thead>
+                  <tr>
+                    <th>文件名</th>
+                    <th>源大小</th>
+                    <th>输出格式</th>
+                    <th>输出音质</th>
+                    <th>采样率</th>
+                    <th>状态</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="!audioQualityState.items.length">
+                    <td colspan="7" class="image-table-empty">请选择音乐</td>
+                  </tr>
+                  <tr v-for="item in audioQualityState.items" v-else :key="item.id">
+                    <td>
+                      <span class="image-file-name" :title="item.error || item.sourceName">{{ item.sourceName }}</span>
+                    </td>
+                    <td>{{ formatBytes(item.originalBytes) }}</td>
+                    <td>{{ item.format ? item.format.toUpperCase() : audioQualityOptions.format.toUpperCase() }}</td>
+                    <td>{{ item.bitrate ? `${item.bitrate} kbps` : `${audioQualityOptions.bitrate.value || "--"} kbps` }}</td>
+                    <td>{{ item.sampleRate ? `${(item.sampleRate / 1000).toFixed(1)} kHz` : "--" }}</td>
+                    <td>
+                      <span class="image-status-pill" :class="item.status === 'processing' ? 'is-compressing' : item.status === 'done' ? 'is-done' : item.status === 'error' ? 'is-error' : ''">
+                        <span v-if="item.status === 'processing'" class="loading-spinner" aria-hidden="true"></span>
+                        {{ item.statusText }}
+                      </span>
+                    </td>
+                    <td>
+                      <button class="image-row-download" type="button" :disabled="busy.audioQuality || item.status !== 'done'" @click="downloadAudioQualityResult(item)">
+                        下载
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="image-list-actions">
+              <div class="primary-actions">
+                <button class="secondary-button" type="button" :disabled="busy.audioQuality || !audioQualityState.items.length" @click="clearAudioQuality">
+                  <svg class="icon" aria-hidden="true"><use href="#icon-trash"></use></svg>
+                  清空音乐
+                </button>
+              </div>
+              <div class="image-main-actions">
+                <button class="primary-button image-start-button" type="button" :disabled="busy.audioQuality || !audioQualityState.items.length" @click="startAudioQualityConvert">
+                  <span v-if="busy.audioQuality" class="loading-spinner" aria-hidden="true"></span>
+                  <svg v-else class="icon" aria-hidden="true"><use href="#icon-play"></use></svg>
+                  {{ busy.audioQuality ? `转换中 ${audioQualityState.progress}/${audioQualityState.total}` : "开始转换" }}
+                </button>
+                <button class="primary-button image-download-all" type="button" :disabled="!audioQualityCanDownloadAll" @click="downloadAllAudioQualityResults">
+                  <svg class="icon" aria-hidden="true"><use href="#icon-download"></use></svg>
+                  全部下载
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <p class="feedback" :class="feedback.audioQuality.type && `is-${feedback.audioQuality.type}`" role="status" aria-live="polite">
+          {{ feedback.audioQuality.message }}
         </p>
       </section>
 
