@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { zipSync } from "fflate";
 import { fetchOpenAIModels, runApiPurityCheck } from "./lib/apiPurity.js";
 import { runTransformTask } from "./lib/transform.js";
+import ImageCropperTool from "./components/ImageCropperTool.vue";
 
 const tools = [
   {
@@ -40,6 +41,15 @@ const tools = [
     description: "给图片添加文字水印，支持实时预览和参数调节。",
     seoDescription: "TGMENG TOOLS 图片水印工具，纯前端给图片添加文字水印，支持颜色、透明度、角度、间隔和字号实时预览。",
     keywords: "图片水印,在线图片水印,文字水印,水印预览,纯前端图片水印,TGMENG TOOLS",
+  },
+  {
+    key: "image-crop",
+    title: "图片裁切",
+    icon: "crop",
+    group: "图片工具",
+    description: "纯前端把拼图、表情包和长图按网格裁切成单张图片，支持微调和批量导出。",
+    seoDescription: "TGMENG TOOLS 图片裁切工具，纯前端本地完成网格裁切、拖拽微调、去白边、补方图、白底透明和 ZIP 批量导出，适合表情包拆图、拼图切图和长图切片。",
+    keywords: "图片裁切,在线图片裁切,图片裁剪,在线图片裁剪,表情包拆图,拼图切图,九宫格裁切,雪碧图裁切,长图切片,纯前端图片裁切,TGMENG TOOLS",
   },
   {
     key: "audio-quality",
@@ -93,8 +103,8 @@ const homePath = "/";
 const siteOrigin = "https://tools.tgmeng.com";
 const siteName = "TGMENG TOOLS";
 const siteTitle = "TGMENG TOOLS - 糖果梦工具箱";
-const siteDescription = "TGMENG TOOLS 是糖果梦工具箱，提供中转站纯度检测、图片压缩、图片水印、音质修改、JSON 格式化和 Base64 加解密等纯前端工具。";
-const siteKeywords = "TGMENG TOOLS,糖果梦工具箱,中转站纯度检测,图片压缩,图片水印,音质修改,JSON 格式化,Base64 加解密,纯前端工具,在线工具";
+const siteDescription = "TGMENG TOOLS 是糖果梦工具箱，提供中转站纯度检测、图片压缩、图片水印、图片裁切、音质修改、JSON 格式化和 Base64 加解密等纯前端工具。";
+const siteKeywords = "TGMENG TOOLS,糖果梦工具箱,中转站纯度检测,图片压缩,图片水印,图片裁切,表情包拆图,音质修改,JSON 格式化,Base64 加解密,纯前端工具,在线工具";
 const siteImage = `${siteOrigin}/assets/logo.png`;
 const homePage = {
   key: "home",
@@ -2332,6 +2342,10 @@ async function copyText(textarea, tool) {
       <circle cx="8.5" cy="8.5" r="1.5" />
       <path d="m21 15-5-5L5 21" />
     </symbol>
+    <symbol id="icon-crop" viewBox="0 0 24 24">
+      <path d="M6 2v14a2 2 0 0 0 2 2h14" />
+      <path d="M18 22V8a2 2 0 0 0-2-2H2" />
+    </symbol>
     <symbol id="icon-upload" viewBox="0 0 24 24">
       <path d="M12 16V4M7 9l5-5 5 5M4 20h16" />
     </symbol>
@@ -3064,6 +3078,8 @@ async function copyText(textarea, tool) {
           {{ feedback.imageWatermark.message }}
         </p>
       </section>
+
+      <ImageCropperTool v-show="activeTool === 'image-crop'" />
 
       <section v-show="activeTool === 'audio-quality'" class="tool-view audio-quality-view" aria-labelledby="audioQualityTitle">
         <h2 id="audioQualityTitle" class="sr-only">音质修改</h2>
