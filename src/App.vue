@@ -4,6 +4,7 @@ import { zipSync } from "fflate";
 import { fetchOpenAIModels, runApiPurityCheck } from "./lib/apiPurity.js";
 import { runTransformTask } from "./lib/transform.js";
 import ImageCropperTool from "./components/ImageCropperTool.vue";
+import { BRAND_LOGO_URLS } from "./brandLogo.js";
 
 const tools = [
   {
@@ -105,7 +106,8 @@ const siteName = "TGMENG TOOLS";
 const siteTitle = "TGMENG TOOLS - 糖果梦工具箱";
 const siteDescription = "TGMENG TOOLS 是糖果梦工具箱，提供中转站纯度检测、图片压缩、图片水印、图片裁切、音质修改、JSON 格式化和 Base64 加解密等纯前端工具。";
 const siteKeywords = "TGMENG TOOLS,糖果梦工具箱,中转站纯度检测,图片压缩,图片水印,图片裁切,表情包拆图,音质修改,JSON 格式化,Base64 加解密,纯前端工具,在线工具";
-const siteImage = `${siteOrigin}/assets/logo.png`;
+const siteImage = BRAND_LOGO_URLS.social;
+const theme = ref("light");
 const homePage = {
   key: "home",
   title: "首页",
@@ -757,8 +759,8 @@ function setStructuredData(tool, title, description, url) {
         "logo": {
           "@type": "ImageObject",
           "url": siteImage,
-          "width": 180,
-          "height": 180,
+          "width": 512,
+          "height": 512,
         },
       },
       {
@@ -873,11 +875,13 @@ function handleKeydown(event) {
 function restoreTheme() {
   const saved = localStorage.getItem(storageKeys.theme);
   const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  document.documentElement.dataset.theme = saved || (prefersDark ? "dark" : "light");
+  theme.value = saved || (prefersDark ? "dark" : "light");
+  document.documentElement.dataset.theme = theme.value;
 }
 
 function toggleTheme() {
   const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  theme.value = next;
   document.documentElement.dataset.theme = next;
   localStorage.setItem(storageKeys.theme, next);
 }
@@ -2380,7 +2384,7 @@ async function copyText(textarea, tool) {
       <div class="brand">
         <button class="brand-home" type="button" aria-label="回到首页" title="首页" @click="activateTool('home')">
         <span class="brand-mark" aria-hidden="true">
-          <img class="brand-logo" src="/assets/logo.png" alt="" />
+          <img class="brand-logo" :src="theme === 'dark' ? BRAND_LOGO_URLS.siteDark : BRAND_LOGO_URLS.siteLight" alt="" />
         </span>
         <span class="brand-text">
           <strong>TGMENG TOOLS</strong>

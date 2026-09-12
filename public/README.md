@@ -8,5 +8,6 @@
 
 访问方式示例：
 
-- `public/assets/logo.png` 在页面中访问为 `/assets/logo.png`
 - `public/assets/data/tools.json` 在页面中访问为 `/assets/data/tools.json`
+
+糖果梦 Logo 统一使用 R2 远程资源，项目内不再保留品牌 Logo 文件。
